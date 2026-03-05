@@ -1,0 +1,685 @@
+---
+title: "Monitoring"
+description: "Monitor virtual cluster health, performance, and resource usage"
+---
+
+## Overview
+
+Effective monitoring is essential for maintaining healthy virtual clusters. This guide covers monitoring strategies, metrics collection, and observability best practices for vCluster deployments.
+
+## Monitoring Architecture
+
+vCluster monitoring operates at multiple levels:
+
+<CardGroup cols={3}>
+  <Card title="Control Plane" icon="server">
+    Monitor vCluster control plane pods, API server health, and syncer performance
+  </Card>
+  
+  <Card title="Virtual Resources" icon="cube">
+    Track resources running inside the virtual cluster
+  </Card>
+  
+  <Card title="Host Resources" icon="layer-group">
+    Monitor synced resources in the host cluster namespace
+  </Card>
+</CardGroup>
+
+## Quick Health Checks
+
+### vCluster Control Plane Status
+
+Check if vCluster control plane is running:
+
+```bash
+# List all vClusters
+vcluster list
+
+# Check pods in host namespace
+kubectl get pods -n production -l release=my-vcluster
+
+# Check pod health details
+kubectl describe pod -n production -l app=vcluster,release=my-vcluster
+```
+
+### Virtual Cluster Connectivity
+
+Test connection to the virtual cluster:
+
+```bash
+# Connect and check nodes
+vcluster connect my-vcluster --namespace production
+kubectl get nodes
+kubectl get pods --all-namespaces
+
+# Check API server responsiveness
+kubectl get --raw /healthz
+kubectl get --raw /readyz
+```
+
+### Resource Syncing Status
+
+Verify resources are syncing correctly:
+
+```bash
+# Create test resource in virtual cluster
+vcluster connect my-vcluster --namespace production
+kubectl create deployment test-sync --image=nginx
+
+# Verify it synced to host namespace
+vcluster disconnect
+kubectl get pods -n production | grep test-sync
+
+# Cleanup
+vcluster connect my-vcluster --namespace production
+kubectl delete deployment test-sync
+```
+
+## Prometheus Integration
+
+### Enabling Metrics
+
+Configure vCluster to expose Prometheus metrics:
+
+```yaml
+# vcluster.yaml
+controlPlane:
+  statefulSet:
+    podMetadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8443"
+        prometheus.io/path: "/metrics"
+
+observability:
+  metrics:
+    enabled: true
+```
+
+Apply the configuration:
+
+```bash
+helm upgrade my-vcluster vcluster \
+  --repo https://charts.loft.sh \
+  --namespace production \
+  --values vcluster.yaml
+```
+
+### ServiceMonitor for Prometheus Operator
+
+If using Prometheus Operator, create a ServiceMonitor:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vcluster-my-vcluster
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: vcluster
+      release: my-vcluster
+  endpoints:
+  - port: https
+    interval: 30s
+    scheme: https
+    tlsConfig:
+      insecureSkipVerify: true
+    path: /metrics
+```
+
+Apply the ServiceMonitor:
+
+```bash
+kubectl apply -f servicemonitor.yaml
+```
+
+## Key Metrics to Monitor
+
+### Control Plane Metrics
+
+<AccordionGroup>
+  <Accordion title="API Server Metrics">
+    **Important metrics:**
+    - `apiserver_request_total` - Total API requests
+    - `apiserver_request_duration_seconds` - Request latency
+    - `apiserver_request_errors_total` - Failed requests
+    - `apiserver_storage_objects` - Number of stored objects
+    
+    **Prometheus query examples:**
+    ```promql
+    # API server request rate
+    rate(apiserver_request_total[5m])
+    
+    # API server error rate
+    rate(apiserver_request_errors_total[5m])
+    
+    # P95 API latency
+    histogram_quantile(0.95, rate(apiserver_request_duration_seconds_bucket[5m]))
+    ```
+  </Accordion>
+  
+  <Accordion title="Syncer Metrics">
+    **Important metrics:**
+    - `vcluster_syncer_sync_operations_total` - Sync operations count
+    - `vcluster_syncer_sync_errors_total` - Sync failures
+    - `vcluster_syncer_sync_duration_seconds` - Sync operation duration
+    - `vcluster_syncer_resources_synced` - Number of synced resources
+    
+    **Prometheus query examples:**
+    ```promql
+    # Sync error rate
+    rate(vcluster_syncer_sync_errors_total[5m])
+    
+    # Average sync duration
+    rate(vcluster_syncer_sync_duration_seconds_sum[5m]) / 
+    rate(vcluster_syncer_sync_duration_seconds_count[5m])
+    
+    # Resources synced by type
+    vcluster_syncer_resources_synced
+    ```
+  </Accordion>
+  
+  <Accordion title="Resource Usage">
+    **Important metrics:**
+    - `container_memory_usage_bytes` - Memory usage
+    - `container_cpu_usage_seconds_total` - CPU usage
+    - `container_network_receive_bytes_total` - Network ingress
+    - `container_network_transmit_bytes_total` - Network egress
+    
+    **Prometheus query examples:**
+    ```promql
+    # Memory usage by container
+    container_memory_usage_bytes{
+      namespace="production",
+      pod=~"my-vcluster-.*"
+    }
+    
+    # CPU usage rate
+    rate(container_cpu_usage_seconds_total{
+      namespace="production",
+      pod=~"my-vcluster-.*"
+    }[5m])
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Grafana Dashboards
+
+### Pre-built Dashboard
+
+Import the vCluster Grafana dashboard:
+
+1. Open Grafana
+2. Go to Dashboards → Import
+3. Use dashboard ID: `15843` (community vCluster dashboard)
+4. Or import from JSON:
+
+```json
+{
+  "dashboard": {
+    "title": "vCluster Overview",
+    "panels": [
+      {
+        "title": "API Server Request Rate",
+        "targets": [{
+          "expr": "rate(apiserver_request_total{namespace='production'}[5m])"
+        }]
+      },
+      {
+        "title": "Sync Operations",
+        "targets": [{
+          "expr": "rate(vcluster_syncer_sync_operations_total[5m])"
+        }]
+      },
+      {
+        "title": "Memory Usage",
+        "targets": [{
+          "expr": "container_memory_usage_bytes{namespace='production',pod=~'my-vcluster-.*'}"
+        }]
+      }
+    ]
+  }
+}
+```
+
+### Custom Dashboard Panels
+
+<Tabs>
+  <Tab title="Health Status">
+    ```promql
+    # Panel: vCluster Health
+    up{job="vcluster", namespace="production"}
+    
+    # Use single stat visualization
+    # Thresholds: 1 = green, 0 = red
+    ```
+  </Tab>
+  
+  <Tab title="Resource Sync">
+    ```promql
+    # Panel: Synced Resources by Type
+    sum by (resource_type) (
+      vcluster_syncer_resources_synced{namespace="production"}
+    )
+    
+    # Use bar chart or table visualization
+    ```
+  </Tab>
+  
+  <Tab title="Performance">
+    ```promql
+    # Panel: API Latency P95
+    histogram_quantile(0.95,
+      rate(apiserver_request_duration_seconds_bucket{
+        namespace="production"
+      }[5m])
+    )
+    
+    # Use time series graph
+    # Alert threshold: > 1s
+    ```
+  </Tab>
+  
+  <Tab title="Errors">
+    ```promql
+    # Panel: Error Rate
+    sum(rate(apiserver_request_errors_total{
+      namespace="production"
+    }[5m]))
+    
+    # Use time series with alert threshold
+    ```
+  </Tab>
+</Tabs>
+
+## Logging
+
+### Centralized Log Collection
+
+#### Using Fluentd/Fluent Bit
+
+```yaml
+# fluentbit-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config
+  namespace: logging
+data:
+  fluent-bit.conf: |
+    [INPUT]
+        Name              tail
+        Path              /var/log/containers/my-vcluster-*.log
+        Parser            docker
+        Tag               vcluster.*
+        Refresh_Interval  5
+    
+    [FILTER]
+        Name    kubernetes
+        Match   vcluster.*
+        Kube_URL https://kubernetes.default.svc:443
+    
+    [OUTPUT]
+        Name  es
+        Match vcluster.*
+        Host  elasticsearch.logging.svc
+        Port  9200
+        Index vcluster-logs
+```
+
+#### Using Loki
+
+```yaml
+# promtail-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promtail-config
+  namespace: logging
+data:
+  promtail.yaml: |
+    server:
+      http_listen_port: 9080
+    
+    positions:
+      filename: /tmp/positions.yaml
+    
+    clients:
+      - url: http://loki.logging.svc:3100/loki/api/v1/push
+    
+    scrape_configs:
+      - job_name: vcluster
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - production
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            regex: vcluster
+            action: keep
+```
+
+### Viewing vCluster Logs
+
+```bash
+# View control plane logs
+kubectl logs -n production -l app=vcluster,release=my-vcluster
+
+# Follow logs in real-time
+kubectl logs -n production -l app=vcluster,release=my-vcluster -f
+
+# View specific container logs
+kubectl logs -n production my-vcluster-0 -c syncer
+
+# View previous container logs (after restart)
+kubectl logs -n production my-vcluster-0 --previous
+
+# Export logs to file
+kubectl logs -n production -l app=vcluster,release=my-vcluster > vcluster-logs.txt
+```
+
+### Log Levels and Debugging
+
+Increase log verbosity for troubleshooting:
+
+```yaml
+# vcluster.yaml
+controlPlane:
+  statefulSet:
+    env:
+    - name: DEBUG
+      value: "true"
+    - name: VCLUSTER_LOG_LEVEL
+      value: "debug"  # Options: info, debug, trace
+```
+
+## Alerting
+
+### Prometheus AlertManager Rules
+
+```yaml
+# vcluster-alerts.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vcluster-alerts
+  namespace: monitoring
+data:
+  alerts.yaml: |
+    groups:
+    - name: vcluster
+      interval: 30s
+      rules:
+      # Control plane health
+      - alert: VClusterDown
+        expr: up{job="vcluster"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "vCluster {{ $labels.namespace }}/{{ $labels.vcluster }} is down"
+          description: "vCluster has been down for more than 5 minutes"
+      
+      # High error rate
+      - alert: VClusterHighErrorRate
+        expr: |
+          rate(apiserver_request_errors_total[5m]) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate in vCluster API server"
+          description: "Error rate is {{ $value | humanizePercentage }}"
+      
+      # Sync failures
+      - alert: VClusterSyncFailures
+        expr: |
+          rate(vcluster_syncer_sync_errors_total[5m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "vCluster sync failures detected"
+          description: "Syncer is failing to sync resources"
+      
+      # High memory usage
+      - alert: VClusterHighMemory
+        expr: |
+          container_memory_usage_bytes{pod=~"my-vcluster-.*"} / 
+          container_spec_memory_limit_bytes{pod=~"my-vcluster-.*"} > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "vCluster high memory usage"
+          description: "Memory usage is above 90%"
+      
+      # API latency
+      - alert: VClusterHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(apiserver_request_duration_seconds_bucket[5m])
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "vCluster API server high latency"
+          description: "P95 latency is {{ $value }}s"
+      
+      # Pod restarts
+      - alert: VClusterFrequentRestarts
+        expr: |
+          rate(kube_pod_container_status_restarts_total{
+            namespace="production",
+            pod=~"my-vcluster-.*"
+          }[15m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "vCluster pod restarting frequently"
+          description: "Pod {{ $labels.pod }} has restarted {{ $value }} times"
+```
+
+Apply the alerts:
+
+```bash
+kubectl apply -f vcluster-alerts.yaml
+```
+
+## Distributed Tracing
+
+### OpenTelemetry Integration
+
+Configure vCluster to export traces:
+
+```yaml
+# vcluster.yaml
+observability:
+  tracing:
+    enabled: true
+    endpoint: "otel-collector.observability.svc:4317"
+    serviceName: "vcluster-my-vcluster"
+    samplingRate: 0.1  # Sample 10% of requests
+```
+
+### Jaeger Configuration
+
+```yaml
+# Deploy Jaeger operator
+apiVersion: jaegertracing.io/v1
+kind: Jaeger
+metadata:
+  name: vcluster-tracing
+  namespace: observability
+spec:
+  strategy: production
+  storage:
+    type: elasticsearch
+    options:
+      es:
+        server-urls: http://elasticsearch:9200
+  ingress:
+    enabled: true
+```
+
+## Health Checks and Probes
+
+### Custom Liveness Probe
+
+```yaml
+# vcluster.yaml
+controlPlane:
+  statefulSet:
+    containers:
+      - name: vcluster
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+```
+
+### External Monitoring Script
+
+```bash
+#!/bin/bash
+# monitor-vcluster.sh
+
+VCLUSTER_NAME="my-vcluster"
+NAMESPACE="production"
+ALERT_WEBHOOK="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+
+check_health() {
+  # Check if pods are running
+  RUNNING=$(kubectl get pods -n $NAMESPACE -l release=$VCLUSTER_NAME \
+    -o jsonpath='{.items[*].status.phase}' | grep -c "Running")
+  
+  if [ $RUNNING -eq 0 ]; then
+    echo "CRITICAL: No running pods found for $VCLUSTER_NAME"
+    send_alert "vCluster $VCLUSTER_NAME is down!"
+    return 1
+  fi
+  
+  # Check API server
+  if ! vcluster connect $VCLUSTER_NAME --namespace $NAMESPACE -- kubectl get --raw /healthz &>/dev/null; then
+    echo "WARNING: API server not responding"
+    send_alert "vCluster $VCLUSTER_NAME API server not responding"
+    return 1
+  fi
+  
+  echo "OK: vCluster $VCLUSTER_NAME is healthy"
+  return 0
+}
+
+send_alert() {
+  MESSAGE=$1
+  curl -X POST $ALERT_WEBHOOK \
+    -H 'Content-Type: application/json' \
+    -d "{\"text\": \"$MESSAGE\"}"
+}
+
+check_health
+exit $?
+```
+
+Schedule with cron:
+
+```bash
+# Run every 5 minutes
+*/5 * * * * /usr/local/bin/monitor-vcluster.sh
+```
+
+## Performance Monitoring
+
+### Resource Usage Over Time
+
+```bash
+# Monitor CPU and memory
+watch -n 5 'kubectl top pods -n production -l release=my-vcluster'
+
+# Export metrics for analysis
+kubectl top pods -n production -l release=my-vcluster --containers > metrics-$(date +%Y%m%d-%H%M%S).txt
+```
+
+### Network Monitoring
+
+```bash
+# Network I/O
+kubectl get pods -n production -l release=my-vcluster -o json | \
+  jq -r '.items[] | .status.containerStatuses[] | 
+    "\(.name): RX=\(.stats.network.rxBytes) TX=\(.stats.network.txBytes)"'
+```
+
+## Debugging Tools
+
+### Debug Collect Command
+
+Generate comprehensive debug bundle:
+
+```bash
+vcluster debug collect my-vcluster --namespace production
+```
+
+This creates a tarball with:
+- vCluster release info
+- Pod logs (current and previous)
+- Host cluster info and resources
+- Virtual cluster info and resources
+- Resource counts
+
+### Debug Shell
+
+Direct shell access to vCluster pod:
+
+```bash
+vcluster debug shell my-vcluster --namespace production
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Multi-Level Monitoring" icon="layer-group">
+    Monitor at all levels: control plane, virtual resources, and host resources.
+  </Card>
+  
+  <Card title="Set Meaningful Alerts" icon="bell">
+    Configure alerts for actionable issues, not just symptoms. Avoid alert fatigue.
+  </Card>
+  
+  <Card title="Retain Historical Data" icon="database">
+    Keep metrics and logs for at least 30 days for trend analysis and troubleshooting.
+  </Card>
+  
+  <Card title="Dashboard for Each Environment" icon="gauge">
+    Create dedicated dashboards for production, staging, and development clusters.
+  </Card>
+  
+  <Card title="Regular Reviews" icon="calendar-check">
+    Schedule weekly reviews of monitoring data to identify trends and issues early.
+  </Card>
+  
+  <Card title="Document Baselines" icon="chart-line">
+    Establish and document normal performance baselines for comparison.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Troubleshooting" icon="wrench" href="/operations/troubleshooting">
+    Learn how to diagnose and fix issues detected by monitoring
+  </Card>
+  
+  <Card title="Managing vClusters" icon="sliders" href="/operations/managing-vclusters">
+    Return to general management operations
+  </Card>
+</CardGroup>

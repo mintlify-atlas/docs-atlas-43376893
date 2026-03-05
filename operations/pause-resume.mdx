@@ -1,0 +1,387 @@
+---
+title: "Pause & Resume"
+description: "Pause virtual clusters to save resources and resume them when needed"
+---
+
+## Overview
+
+Pausing a virtual cluster stops it and frees all computing resources while preserving the cluster state. This is useful for:
+
+- **Cost savings**: Stop development/test clusters outside business hours
+- **Resource management**: Free up cluster capacity temporarily
+- **Environment control**: Prevent accidental changes during maintenance
+
+<Note>
+  Persistent data (PVCs, ConfigMaps, Secrets) is preserved during pause. Only running workloads are stopped.
+</Note>
+
+## Pausing a Virtual Cluster
+
+### Basic Pause Command
+
+```bash
+vcluster pause my-vcluster --namespace team-dev
+```
+
+**What happens during pause:**
+
+<Steps>
+  <Step title="Scale Down">
+    The virtual cluster control plane is scaled down to zero replicas.
+  </Step>
+  
+  <Step title="Delete Workloads">
+    All workloads created through the virtual cluster (Pods, Deployments, etc.) are deleted from the host cluster.
+  </Step>
+  
+  <Step title="Preserve State">
+    Persistent resources remain:
+    - Persistent Volume Claims
+    - Services
+    - ConfigMaps and Secrets
+    - Network policies
+  </Step>
+  
+  <Step title="Release Resources">
+    Computing resources (CPU, memory) are freed and returned to the host cluster.
+  </Step>
+</Steps>
+
+### Pause Alias
+
+You can also use the `sleep` alias:
+
+```bash
+vcluster sleep my-vcluster --namespace team-dev
+```
+
+## Resuming a Virtual Cluster
+
+### Basic Resume Command
+
+```bash
+vcluster resume my-vcluster --namespace team-dev
+```
+
+**What happens during resume:**
+
+<Steps>
+  <Step title="Scale Up">
+    The virtual cluster control plane is scaled back to its configured replica count.
+  </Step>
+  
+  <Step title="Restore API Server">
+    The virtual Kubernetes API server becomes available.
+  </Step>
+  
+  <Step title="Recreate Workloads">
+    All workloads are automatically recreated from the stored state.
+  </Step>
+  
+  <Step title="Resume Operations">
+    The virtual cluster is fully operational and ready to accept requests.
+  </Step>
+</Steps>
+
+### Resume Alias
+
+You can also use the `wakeup` alias:
+
+```bash
+vcluster wakeup my-vcluster --namespace team-dev
+```
+
+## Platform-Managed Sleep
+
+When using vCluster Platform, you can configure automatic sleep policies.
+
+### Prevent Wake-up
+
+Pause a virtual cluster and prevent automatic wake-up for a specific duration:
+
+```bash
+vcluster pause my-vcluster --namespace team-dev --prevent-wakeup 3600
+```
+
+This pauses the virtual cluster for 3600 seconds (1 hour). During this time, it can only be woken up by:
+- Running `vcluster resume` manually
+- Removing the sleep annotation from the namespace
+- Using the vCluster Platform UI
+
+### Infinite Sleep
+
+To pause indefinitely until manually resumed:
+
+```bash
+vcluster pause my-vcluster --namespace team-dev --prevent-wakeup 0
+```
+
+## Driver-Specific Behavior
+
+<Tabs>
+  <Tab title="Helm Driver">
+    ```bash
+    vcluster pause my-vcluster --driver helm
+    ```
+    
+    - Pauses locally managed virtual clusters
+    - Scales StatefulSet to zero
+    - Removes synced workloads from host namespace
+  </Tab>
+  
+  <Tab title="Platform Driver">
+    ```bash
+    vcluster pause my-vcluster --driver platform --project my-project
+    ```
+    
+    - Integrates with Platform sleep policies
+    - Supports automatic wake-up schedules
+    - Tracks sleep time for billing/reporting
+  </Tab>
+  
+  <Tab title="Docker Driver">
+    ```bash
+    vcluster pause my-vcluster --driver docker
+    ```
+    
+    - Stops Docker containers
+    - Preserves container state
+    - Faster resume times for local development
+  </Tab>
+</Tabs>
+
+## Verification
+
+### Check Sleep Status
+
+After pausing, verify the virtual cluster is sleeping:
+
+```bash
+vcluster list
+```
+
+Look for status indicators showing the cluster is paused/sleeping.
+
+### Verify Resource Release
+
+Check that pods are scaled down:
+
+```bash
+kubectl get pods -n team-dev -l release=my-vcluster
+```
+
+You should see no running pods for the virtual cluster.
+
+### Verify State Preservation
+
+Check that persistent resources remain:
+
+```bash
+kubectl get pvc,svc,configmap -n team-dev
+```
+
+## Use Cases
+
+<AccordionGroup>
+  <Accordion title="Development Environment Management">
+    **Scenario:** Pause dev environments outside working hours to save costs.
+    
+    **Implementation:**
+    
+    Create a scheduled job to pause clusters at end of day:
+    
+    ```yaml
+    apiVersion: batch/v1
+    kind: CronJob
+    metadata:
+      name: pause-dev-clusters
+    spec:
+      schedule: "0 18 * * 1-5"  # 6 PM, weekdays
+      jobTemplate:
+        spec:
+          template:
+            spec:
+              containers:
+              - name: pause
+                image: loftsh/vcluster-cli:latest
+                command:
+                - /bin/sh
+                - -c
+                - |
+                  vcluster pause dev-cluster-1 --namespace dev-team-1
+                  vcluster pause dev-cluster-2 --namespace dev-team-2
+              restartPolicy: OnFailure
+    ```
+    
+    Resume in the morning:
+    
+    ```yaml
+    schedule: "0 8 * * 1-5"  # 8 AM, weekdays
+    ```
+  </Accordion>
+  
+  <Accordion title="Staging Environment Control">
+    **Scenario:** Keep staging environments paused until deployment time.
+    
+    **Implementation:**
+    
+    Integrate with CI/CD pipeline:
+    
+    ```yaml
+    # .gitlab-ci.yml / .github/workflows/deploy.yml
+    deploy-to-staging:
+      script:
+        - vcluster resume staging-vcluster --namespace staging
+        - kubectl config use-context vcluster_staging-vcluster_staging
+        - kubectl apply -f deployment.yaml
+        - # Run tests
+        - vcluster pause staging-vcluster --namespace staging
+    ```
+  </Accordion>
+  
+  <Accordion title="Resource Quota Management">
+    **Scenario:** Temporarily free resources during peak usage times.
+    
+    **Implementation:**
+    
+    ```bash
+    # Pause non-critical clusters during production deployment
+    vcluster pause test-cluster-1 --namespace testing
+    vcluster pause demo-cluster --namespace demos
+    
+    # Perform production deployment
+    kubectl apply -f production-deployment.yaml
+    
+    # Resume after deployment
+    vcluster resume test-cluster-1 --namespace testing
+    vcluster resume demo-cluster --namespace demos
+    ```
+  </Accordion>
+  
+  <Accordion title="Cost Optimization">
+    **Scenario:** Automatically pause idle clusters to reduce cloud costs.
+    
+    **Implementation:**
+    
+    Use vCluster Platform's automatic sleep feature based on inactivity:
+    
+    Configure in `vcluster.yaml`:
+    
+    ```yaml
+    sleep:
+      afterInactivity: 1800  # Sleep after 30 minutes of inactivity
+      schedule:
+        - from: "18:00"
+          to: "08:00"
+          weekdays:
+            - monday
+            - tuesday
+            - wednesday
+            - thursday
+            - friday
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<Accordion title="Resume Fails with Platform Driver Required Error">
+  **Error Message:**
+  ```
+  cannot resume a virtual cluster that is paused by the platform, 
+  please run 'vcluster use driver platform' or use the '--driver platform' flag
+  ```
+  
+  **Cause:** The virtual cluster was paused by vCluster Platform, not locally.
+  
+  **Solution:**
+  
+  Resume using the platform driver:
+  ```bash
+  vcluster resume my-vcluster --driver platform --project my-project
+  ```
+  
+  Or set platform as default driver:
+  ```bash
+  vcluster use driver platform
+  vcluster resume my-vcluster
+  ```
+</Accordion>
+
+<Accordion title="Workloads Not Recreating After Resume">
+  **Symptoms:** Virtual cluster resumes but workloads don't start.
+  
+  **Diagnosis:**
+  
+  1. Check virtual cluster pod status:
+     ```bash
+     kubectl get pods -n team-dev -l release=my-vcluster
+     ```
+  
+  2. Check virtual cluster logs:
+     ```bash
+     kubectl logs -n team-dev -l app=vcluster,release=my-vcluster
+     ```
+  
+  3. Connect to virtual cluster and check:
+     ```bash
+     vcluster connect my-vcluster --namespace team-dev
+     kubectl get pods --all-namespaces
+     ```
+  
+  **Solutions:**
+  - Wait a few minutes for synchronization to complete
+  - Check for resource quota issues in the host namespace
+  - Verify network policies aren't blocking synced resources
+</Accordion>
+
+<Accordion title="Pause Command Hangs">
+  **Symptoms:** `vcluster pause` command doesn't complete.
+  
+  **Diagnosis:**
+  
+  Check if the virtual cluster is accessible:
+  ```bash
+  kubectl get vcluster my-vcluster -n team-dev
+  ```
+  
+  **Solutions:**
+  
+  1. Force delete workloads manually:
+     ```bash
+     kubectl delete pods -n team-dev -l vcluster.loft.sh/managed-by=my-vcluster --force
+     ```
+  
+  2. Scale down the StatefulSet:
+     ```bash
+     kubectl scale statefulset my-vcluster -n team-dev --replicas=0
+     ```
+  
+  3. Use platform UI if using platform driver
+</Accordion>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Automate Sleep Schedules" icon="calendar">
+    Use Platform sleep policies or cron jobs to automatically pause clusters during off-hours.
+  </Card>
+  
+  <Card title="Test Resume Process" icon="flask">
+    Regularly test the resume process to ensure workloads recreate correctly.
+  </Card>
+  
+  <Card title="Monitor Resume Times" icon="clock">
+    Track how long it takes for clusters to fully resume and optimize as needed.
+  </Card>
+  
+  <Card title="Document Dependencies" icon="book">
+    Document any external dependencies that need special handling during pause/resume cycles.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<Card title="Snapshots" icon="camera" href="/operations/snapshots">
+  Learn how to create snapshots before pausing for additional safety.
+</Card>

@@ -1,0 +1,658 @@
+---
+title: Shared Nodes Architecture
+description: Maximum density deployment where virtual clusters share host cluster nodes
+---
+
+Shared nodes is the default and most lightweight vCluster architecture. Virtual clusters run entirely within a namespace of the host cluster, with workloads sharing the same physical nodes. This provides the highest density and lowest operational overhead.
+
+## How It Works
+
+In shared nodes mode, the vCluster control plane runs as a pod (or StatefulSet) in a host cluster namespace, and all workloads from the virtual cluster run as pods in that same namespace:
+
+```
+┌───────────────────────── Host Cluster ─────────────────────────┐
+│                                                                      │
+│   ┌────────────────────────────────────────────────────┐   │
+│   │ Namespace: vcluster-my-vcluster              │   │
+│   │                                                  │   │
+│   │  ┌─────────────────────────────────────┐  │   │
+│   │  │ vCluster Control Plane              │  │   │
+│   │  │  - API Server                        │  │   │
+│   │  │  - Syncer                            │  │   │
+│   │  │  - Controller Manager                │  │   │
+│   │  │  - Data Store (SQLite/etcd)          │  │   │
+│   │  └─────────────────────────────────────┘  │   │
+│   │                                                  │   │
+│   │  ┌─────────────────────────────────────┐  │   │
+│   │  │ Workload Pods (synced from virtual)│  │   │
+│   │  │  - nginx-abc123-x-default-x-vc      │  │   │
+│   │  │  - app-xyz789-x-prod-x-vc           │  │   │
+│   │  │  - db-def456-x-data-x-vc            │  │   │
+│   │  └─────────────────────────────────────┘  │   │
+│   │                                                  │   │
+│   │  ┌─────────────────────────────────────┐  │   │
+│   │  │ CoreDNS (optional)                 │  │   │
+│   │  └─────────────────────────────────────┘  │   │
+│   └────────────────────────────────────────────────────┘   │
+│                                                                      │
+│   ┌────────────────────────────────────────────────────┐   │
+│   │ Host Cluster Nodes (Shared)                  │   │
+│   │  - node-1: Runs pods from host + vClusters    │   │
+│   │  - node-2: Runs pods from host + vClusters    │   │
+│   │  - node-3: Runs pods from host + vClusters    │   │
+│   └────────────────────────────────────────────────────┘   │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Characteristics
+
+<Check>**API Isolation**: Complete - each vCluster has its own API server and RBAC</Check>
+<Check>**Scheduling**: Host cluster scheduler assigns pods to host nodes</Check>
+<Check>**Networking**: Uses host cluster's CNI and pod network</Check>
+<Check>**Storage**: Uses host cluster's storage classes and CSI drivers</Check>
+<Check>**Nodes**: Fake nodes displayed in virtual cluster</Check>
+<Check>**Density**: 50+ virtual clusters per host cluster possible</Check>
+
+## Configuration
+
+### Basic Configuration
+
+This is the default configuration - no special settings required:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: false  # Use fake nodes (default)
+
+controlPlane:
+  backingStore:
+    database:
+      embedded:
+        enabled: true  # Embedded SQLite (default)
+
+  statefulSet:
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+```
+
+### Create a Shared Nodes vCluster
+
+<Tabs>
+  <Tab title="CLI (Recommended)">
+    ```bash
+    vcluster create my-vcluster --namespace team-x
+    ```
+
+    This creates a shared nodes vCluster by default.
+  </Tab>
+
+  <Tab title="Helm">
+    ```bash
+    helm install my-vcluster vcluster \
+      --repo https://charts.loft.sh \
+      --namespace vcluster-my-vcluster \
+      --create-namespace
+    ```
+  </Tab>
+
+  <Tab title="values.yaml">
+    ```yaml
+    # values.yaml - Default shared nodes configuration
+    sync:
+      toHost:
+        pods:
+          enabled: true
+        services:
+          enabled: true
+      fromHost:
+        nodes:
+          enabled: false  # Fake nodes
+        storageClasses:
+          enabled: auto
+
+    controlPlane:
+      backingStore:
+        database:
+          embedded:
+            enabled: true
+    ```
+
+    ```bash
+    helm install my-vcluster vcluster \
+      --repo https://charts.loft.sh \
+      --namespace vcluster-my-vcluster \
+      --create-namespace \
+      --values values.yaml
+    ```
+  </Tab>
+</Tabs>
+
+### Advanced Configuration
+
+#### Embedded CoreDNS (Pro)
+
+Reduce pod count by running CoreDNS inside the control plane:
+
+```yaml
+controlPlane:
+  coredns:
+    enabled: true
+    embedded: true  # Runs in control plane pod
+```
+
+#### Resource Quotas
+
+Limit resources consumed by the virtual cluster:
+
+```yaml
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.cpu: 10
+      requests.memory: 20Gi
+      limits.cpu: 20
+      limits.memory: 40Gi
+      count/pods: 20
+      count/services: 20
+```
+
+#### Network Policies
+
+Isolate virtual cluster workloads at the network level:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      publicEgress:
+        enabled: true
+        cidr: 0.0.0.0/0
+        except:
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+```
+
+## Use Cases
+
+### Development and Testing
+
+**Perfect for:** Ephemeral test environments, CI/CD pipelines, developer workspaces
+
+```yaml
+# dev-vcluster.yaml
+controlPlane:
+  statefulSet:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      count/pods: 10
+      requests.memory: 2Gi
+```
+
+**Benefits:**
+- Fast creation (~10 seconds)
+- Minimal resource overhead
+- Easy cleanup
+- Cost-effective for temporary environments
+
+### Multi-Tenancy (Non-Production)
+
+**Perfect for:** Team environments, staging clusters, demo environments
+
+```yaml
+# team-vcluster.yaml
+policies:
+  resourceQuota:
+    enabled: true
+  limitRange:
+    enabled: true
+  networkPolicy:
+    enabled: true
+
+sync:
+  toHost:
+    pods:
+      enforceTolerations:
+        - key: "team"
+          operator: "Equal"
+          value: "team-x"
+          effect: "NoSchedule"
+```
+
+**Benefits:**
+- Team isolation at API level
+- Shared infrastructure reduces costs
+- Independent RBAC and policies per team
+- Easy management through host cluster
+
+### CI/CD Pipelines
+
+**Perfect for:** Test isolation, parallel builds, integration testing
+
+```bash
+#!/bin/bash
+# ci-pipeline.sh
+
+# Create ephemeral vCluster
+vcluster create ci-${CI_JOB_ID} --namespace ci
+
+# Run tests
+kubectl apply -f tests/
+kubectl wait --for=condition=complete job/test-job --timeout=300s
+
+# Cleanup
+vcluster delete ci-${CI_JOB_ID} --namespace ci
+```
+
+**Benefits:**
+- Complete isolation between pipeline runs
+- Parallel execution without conflicts
+- Clean environment for each run
+- Fast spin-up and tear-down
+
+### Cost Optimization
+
+**Perfect for:** Consolidating multiple small clusters, reducing cloud costs
+
+<Card title="Real-World Impact" icon="piggy-bank">
+  **Fortune 500 Insurance Company**: Consolidated 100+ small Kubernetes clusters into 3 large host clusters running 200+ virtual clusters. **Result: 70% reduction in infrastructure costs.**
+</Card>
+
+## Performance Characteristics
+
+### Resource Overhead
+
+**Per vCluster:**
+- **CPU**: 50-200m (idle to moderate load)
+- **Memory**: 128-512MB (depending on workload)
+- **Storage**: 1-5GB (backing store size)
+
+**Example Host Cluster:**
+- 10 worker nodes (4 CPU, 16GB RAM each)
+- Can host: 50+ small vClusters or 20+ medium vClusters
+
+### Startup Time
+
+```bash
+$ time vcluster create test --namespace test
+# ...
+# Successfully created virtual cluster test
+# real    0m12.453s
+```
+
+**Breakdown:**
+- StatefulSet creation: ~5s
+- API server ready: ~5s
+- Syncer initialization: ~2s
+
+### Scaling Limits
+
+| Metric | Small vCluster | Medium vCluster | Large vCluster |
+|--------|---------------:|----------------:|---------------:|
+| Pods | < 50 | 50-200 | 200-1000 |
+| Services | < 20 | 20-100 | 100-500 |
+| Namespaces | < 10 | 10-50 | 50-200 |
+| Control Plane CPU | 50m | 100m | 200m+ |
+| Control Plane Memory | 128Mi | 256Mi | 512Mi+ |
+
+## Networking
+
+### Pod Networking
+
+Pods in virtual clusters get IPs from the host cluster's pod CIDR:
+
+```bash
+# In virtual cluster
+kubectl run test --image=nginx
+kubectl get pod test -o wide
+# NAME   READY   IP           NODE
+# test   1/1     10.244.1.5   fake-node-1
+
+# In host cluster
+kubectl get pod -n vcluster-my-vcluster test-x-default-x-my-vc -o wide
+# NAME                          READY   IP           NODE
+# test-x-default-x-my-vc        1/1     10.244.1.5   node-2
+```
+
+### Service Networking
+
+Services in virtual clusters work transparently:
+
+```yaml
+# Virtual cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+spec:
+  selector:
+    app: nginx
+  ports:
+    - port: 80
+---
+# Host cluster (synced)
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-x-default-x-my-vcluster
+  namespace: vcluster-my-vcluster
+spec:
+  selector:
+    vcluster.loft.sh/namespace: default
+    app: nginx
+  ports:
+    - port: 80
+```
+
+### Ingress
+
+Two approaches for exposing services:
+
+<Tabs>
+  <Tab title="Sync to Host (Recommended)">
+    Enable ingress syncing to use host ingress controller:
+
+    ```yaml
+    sync:
+      toHost:
+        ingresses:
+          enabled: true
+    ```
+
+    Create ingress in virtual cluster:
+
+    ```yaml
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: my-app
+    spec:
+      rules:
+        - host: my-app.example.com
+          http:
+            paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: my-app
+                    port:
+                      number: 80
+    ```
+
+    The ingress is synced to the host cluster and handled by the host ingress controller.
+  </Tab>
+
+  <Tab title="LoadBalancer Services">
+    Use LoadBalancer services directly:
+
+    ```yaml
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: my-app
+    spec:
+      type: LoadBalancer
+      selector:
+        app: my-app
+      ports:
+        - port: 80
+          targetPort: 8080
+    ```
+
+    The service is synced to the host and gets a LoadBalancer IP from the host cluster.
+  </Tab>
+</Tabs>
+
+## Storage
+
+Storage classes from the host cluster are automatically available:
+
+```yaml
+sync:
+  fromHost:
+    storageClasses:
+      enabled: auto  # Syncs all host storage classes
+```
+
+### Using Persistent Volumes
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-ssd  # From host cluster
+  resources:
+    requests:
+      storage: 10Gi
+```
+
+The PVC is synced to the host cluster, and the host's CSI driver provisions the volume.
+
+## Fake Nodes
+
+In shared nodes mode, the virtual cluster shows "fake" nodes:
+
+```bash
+kubectl get nodes
+# NAME         STATUS   ROLES    AGE   VERSION
+# fake-node-1  Ready    <none>   10m   v1.19.1
+# fake-node-2  Ready    <none>   10m   v1.19.1
+```
+
+These are automatically created based on where pods are scheduled.
+
+### Fake Node Behavior
+
+- **Dynamic Creation**: Created when pods are scheduled to new host nodes
+- **Resource Reporting**: Show aggregated capacity from host cluster
+- **No Direct Control**: Users cannot directly manipulate fake nodes
+- **Kubelet Proxy**: Optional proxy for metrics and logs
+
+### Enable Kubelet Proxy
+
+```yaml
+networking:
+  advanced:
+    proxyKubelets:
+      byHostname: true  # Makes nodes accessible by hostname
+      byIP: true        # Creates services for node IPs
+```
+
+This allows tools like Prometheus to scrape kubelet metrics from virtual nodes.
+
+## Pros and Cons
+
+### Advantages
+
+<Check>**Maximum Density**: 50+ vClusters per host cluster</Check>
+<Check>**Lowest Cost**: Minimal resource overhead per vCluster</Check>
+<Check>**Fast Provisioning**: ~10-15 second creation time</Check>
+<Check>**Easy Management**: All vClusters managed through host cluster</Check>
+<Check>**Shared Infrastructure**: Leverage host CNI, CSI, ingress, etc.</Check>
+<Check>**Simple Operations**: No separate node management</Check>
+
+### Limitations
+
+<Warning>**No Compute Isolation**: Pods from different vClusters share nodes</Warning>
+<Warning>**No Network Isolation**: Relies on network policies for isolation</Warning>
+<Warning>**No CNI/CSI Independence**: Must use host cluster's CNI and CSI</Warning>
+<Warning>**Shared Kernel**: Security domains share the same kernel</Warning>
+<Warning>**Limited Node Control**: Cannot customize node-level settings</Warning>
+
+### When NOT to Use Shared Nodes
+
+<Warning>
+  **Compliance Requirements**: If you need complete isolation for PCI-DSS, HIPAA, or other regulations, use [Private Nodes](/architecture/private-nodes).
+</Warning>
+
+<Warning>
+  **Production Multi-Tenancy**: For production SaaS with external customers, consider [Dedicated Nodes](/architecture/dedicated-nodes) or [Private Nodes](/architecture/private-nodes).
+</Warning>
+
+<Warning>
+  **Custom CNI/CSI**: If you need different networking or storage per tenant, use [Private Nodes](/architecture/private-nodes).
+</Warning>
+
+## Troubleshooting
+
+### Pod Scheduling Issues
+
+If pods aren't scheduling, check host cluster resources:
+
+```bash
+# Check host node resources
+kubectl top nodes
+
+# Check pod events in host cluster
+kubectl get events -n vcluster-my-vcluster
+```
+
+### Networking Issues
+
+Verify service syncing:
+
+```bash
+# In virtual cluster
+kubectl get svc my-service
+
+# In host cluster
+kubectl get svc -n vcluster-my-vcluster
+# Look for my-service-x-default-x-my-vcluster
+```
+
+### Storage Issues
+
+Check storage class availability:
+
+```bash
+# In virtual cluster
+kubectl get storageclass
+
+# Should show host storage classes
+```
+
+## Migration Path
+
+You can migrate from shared nodes to other architectures:
+
+<Steps>
+  <Step title="Backup Virtual Cluster">
+    ```bash
+    vcluster snapshot create my-backup --namespace vcluster-my-vcluster
+    ```
+  </Step>
+
+  <Step title="Create New vCluster with Different Architecture">
+    ```bash
+    # Example: Migrate to dedicated nodes
+    vcluster create my-vcluster-v2 --namespace team-x --values dedicated-nodes.yaml
+    ```
+  </Step>
+
+  <Step title="Migrate Workloads">
+    Use tools like Velero or manual kubectl apply to migrate resources.
+  </Step>
+
+  <Step title="Update DNS/Ingress">
+    Point external traffic to the new vCluster.
+  </Step>
+
+  <Step title="Decommission Old vCluster">
+    ```bash
+    vcluster delete my-vcluster --namespace team-x
+    ```
+  </Step>
+</Steps>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Set Resource Quotas" icon="gauge-high">
+    Always set resource quotas to prevent one vCluster from consuming all host resources:
+
+    ```yaml
+    policies:
+      resourceQuota:
+        enabled: true
+        quota:
+          requests.cpu: 10
+          requests.memory: 20Gi
+          count/pods: 50
+    ```
+  </Accordion>
+
+  <Accordion title="Enable Network Policies" icon="network-wired">
+    Use network policies to isolate virtual cluster workloads:
+
+    ```yaml
+    policies:
+      networkPolicy:
+        enabled: true
+    ```
+  </Accordion>
+
+  <Accordion title="Use Namespaces for Organization" icon="folder-tree">
+    Create separate host namespaces for different teams or environments:
+
+    ```bash
+    vcluster create dev-vcluster --namespace vcluster-dev
+    vcluster create staging-vcluster --namespace vcluster-staging
+    ```
+  </Accordion>
+
+  <Accordion title="Monitor Resource Usage" icon="chart-line">
+    Track vCluster resource consumption:
+
+    ```bash
+    kubectl top pods -n vcluster-my-vcluster
+    ```
+  </Accordion>
+
+  <Accordion title="Use Labels for Tracking" icon="tags">
+    Add labels to track ownership and purpose:
+
+    ```yaml
+    controlPlane:
+      advanced:
+        globalMetadata:
+          annotations:
+            team: "platform-engineering"
+            environment: "development"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Dedicated Nodes" icon="server" href="/architecture/dedicated-nodes">
+    Learn about compute isolation with labeled node pools.
+  </Card>
+  <Card title="Private Nodes" icon="shield" href="/architecture/private-nodes">
+    Explore full CNI/CSI isolation for production use cases.
+  </Card>
+  <Card title="Resource Syncing" icon="arrows-rotate" href="/vcluster/configure/vcluster-yaml/sync">
+    Deep dive into resource synchronization configuration.
+  </Card>
+  <Card title="Policies" icon="gavel" href="/vcluster/configure/vcluster-yaml/policies">
+    Configure resource quotas, limit ranges, and network policies.
+  </Card>
+</CardGroup>

@@ -1,0 +1,417 @@
+---
+title: Development & Testing
+description: Accelerate development workflows with ephemeral Kubernetes environments
+---
+
+## The Challenge
+
+Development and testing on Kubernetes is slow and expensive:
+
+- **Shared dev clusters cause conflicts** - Teams step on each other's deployments
+- **Slow environment provisioning** - Waiting days for new clusters blocks productivity
+- **Expensive infrastructure** - Running dedicated clusters per developer or PR is costly
+- **CI/CD bottlenecks** - Limited test environments create queues and slow pipelines
+- **Production parity is hard** - Dev environments don't match production configurations
+
+## How vCluster Solves It
+
+vCluster provides **lightweight, ephemeral Kubernetes clusters** that:
+
+- **Spin up in seconds** - Create isolated environments on-demand
+- **Run on shared infrastructure** - Maximize density to reduce costs
+- **Match production** - Test with the same Kubernetes version and configurations
+- **Integrate with CI/CD** - Automate cluster creation and teardown in pipelines
+- **Enable parallel testing** - Run multiple test suites simultaneously without conflicts
+
+## Real-World Examples
+
+### CI/CD Pipeline Testing
+
+**Scanmetrix** achieved **99% faster deployments** by using vCluster for ephemeral test environments. Each PR gets its own isolated Kubernetes cluster.
+
+### Development Environments
+
+**Ada** improved developer productivity **10x** by giving each developer their own on-demand vCluster. Developers can experiment freely without affecting others.
+
+### Integration Testing
+
+Run integration tests in parallel across multiple isolated clusters. **Aussie Broadband** achieved **99% faster provisioning** for test environments.
+
+## Recommended Configuration
+
+### Ephemeral Dev Clusters
+
+Lightweight configuration optimized for fast startup:
+
+```yaml
+controlPlane:
+  backingStore:
+    database:
+      embedded:
+        enabled: true  # Use embedded SQLite for speed
+  statefulSet:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 1Gi
+  coredns:
+    embedded: true  # Faster DNS resolution
+
+sync:
+  fromHost:
+    nodes:
+      enabled: false  # Use pseudo nodes for maximum density
+
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.cpu: 4
+      requests.memory: 8Gi
+      count/pods: 50
+```
+
+### CI/CD Testing
+
+Automated creation and cleanup:
+
+```yaml
+controlPlane:
+  statefulSet:
+    persistence:
+      volumeClaim:
+        enabled: false  # No persistence needed for ephemeral clusters
+  
+sync:
+  fromHost:
+    nodes:
+      enabled: false
+    storageClasses:
+      enabled: auto
+
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.cpu: 8
+      requests.memory: 16Gi
+      limits.cpu: 12
+      limits.memory: 24Gi
+```
+
+### Integration Testing
+
+Parallel test execution:
+
+```yaml
+controlPlane:
+  distro:
+    k8s:
+      enabled: true
+      version: v1.31.0  # Match production version
+  backingStore:
+    database:
+      embedded:
+        enabled: true
+
+integrations:
+  metricsServer:
+    enabled: true  # For testing HPA and metrics
+
+policies:
+  networkPolicy:
+    enabled: true  # Test network policies
+    workload:
+      publicEgress:
+        enabled: true
+```
+
+### Preview Environments
+
+Per-branch environments for PR reviews:
+
+```yaml
+controlPlane:
+  ingress:
+    enabled: true
+    host: pr-${PR_NUMBER}.preview.example.com
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+
+sync:
+  fromHost:
+    nodes:
+      enabled: false
+  toHost:
+    ingresses:
+      enabled: true
+
+integrations:
+  certManager:
+    enabled: true
+```
+
+## Best Practices
+
+### 1. Automate Cluster Lifecycle in CI/CD
+
+Create and destroy clusters automatically:
+
+```yaml
+# .github/workflows/pr-preview.yml
+name: PR Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, closed]
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Install vCluster CLI
+        run: |
+          curl -L -o vcluster "https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-linux-amd64"
+          chmod +x vcluster
+          sudo mv vcluster /usr/local/bin/
+      
+      - name: Create vCluster
+        if: github.event.action != 'closed'
+        run: |
+          vcluster create pr-${{ github.event.pull_request.number }} \
+            --namespace pr-environments \
+            --values .vcluster-ci.yaml \
+            --connect=false
+      
+      - name: Deploy Application
+        if: github.event.action != 'closed'
+        run: |
+          vcluster connect pr-${{ github.event.pull_request.number }} --namespace pr-environments
+          kubectl apply -f ./k8s/
+      
+      - name: Delete vCluster
+        if: github.event.action == 'closed'
+        run: |
+          vcluster delete pr-${{ github.event.pull_request.number }} --namespace pr-environments
+```
+
+### 2. Use Resource Quotas
+
+Prevent runaway test environments:
+
+```yaml
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.cpu: 4
+      requests.memory: 8Gi
+      requests.storage: 50Gi
+      count/pods: 50
+      count/services: 20
+      services.loadbalancers: 0  # Disable for dev environments
+```
+
+### 3. Match Production Kubernetes Version
+
+Test against the same version used in production:
+
+```yaml
+controlPlane:
+  distro:
+    k8s:
+      enabled: true
+      version: v1.31.0  # Match production
+```
+
+### 4. Enable Fast Cleanup
+
+Use labels for bulk deletion:
+
+```bash
+# Create with labels
+vcluster create test-${BUILD_ID} \
+  --namespace ci-tests \
+  --labels ci=true,build=${BUILD_ID}
+
+# Clean up old test clusters
+kubectl delete vcluster -n ci-tests -l ci=true,build!=${BUILD_ID}
+```
+
+### 5. Share Storage Classes
+
+Reuse host cluster storage for faster provisioning:
+
+```yaml
+sync:
+  fromHost:
+    storageClasses:
+      enabled: true  # Share host storage classes
+```
+
+### 6. Optimize for Fast Startup
+
+```yaml
+controlPlane:
+  backingStore:
+    database:
+      embedded:
+        enabled: true  # Faster than external databases
+  coredns:
+    embedded: true  # Reduce pod count
+  statefulSet:
+    persistence:
+      volumeClaim:
+        enabled: false  # No persistence for ephemeral clusters
+    probes:
+      startupProbe:
+        periodSeconds: 2  # Faster startup detection
+```
+
+### 7. Implement Naming Conventions
+
+Make it easy to identify and clean up environments:
+
+```bash
+# Development
+vcluster create dev-${USER}-${FEATURE_NAME}
+
+# CI/CD
+vcluster create ci-pr-${PR_NUMBER}
+
+# Testing
+vcluster create test-${COMMIT_SHA}
+```
+
+### 8. Set Automatic Cleanup Policies
+
+Delete inactive clusters automatically (requires vCluster Platform):
+
+```yaml
+# Via vCluster Platform
+sleep:
+  afterInactivity: 2h
+  deleteAfter: 24h  # Auto-delete after 1 day of sleep
+```
+
+## CI/CD Integration Examples
+
+### GitHub Actions
+
+```yaml
+- name: Run Integration Tests
+  run: |
+    vcluster create test-${{ github.run_id }} -n ci-tests --wait
+    vcluster connect test-${{ github.run_id }} -n ci-tests
+    kubectl apply -f ./test-fixtures/
+    make integration-test
+    vcluster delete test-${{ github.run_id }} -n ci-tests
+```
+
+### GitLab CI
+
+```yaml
+integration_tests:
+  stage: test
+  script:
+    - vcluster create test-$CI_PIPELINE_ID -n ci-tests --wait
+    - vcluster connect test-$CI_PIPELINE_ID -n ci-tests
+    - kubectl apply -f ./test-fixtures/
+    - make integration-test
+  after_script:
+    - vcluster delete test-$CI_PIPELINE_ID -n ci-tests
+```
+
+### Jenkins
+
+```groovy
+pipeline {
+  agent any
+  stages {
+    stage('Test') {
+      steps {
+        sh '''
+          vcluster create test-${BUILD_NUMBER} -n ci-tests --wait
+          vcluster connect test-${BUILD_NUMBER} -n ci-tests
+          kubectl apply -f ./test-fixtures/
+          make integration-test
+        '''
+      }
+    }
+  }
+  post {
+    always {
+      sh 'vcluster delete test-${BUILD_NUMBER} -n ci-tests'
+    }
+  }
+}
+```
+
+## Cost Optimization
+
+### Maximize Density
+
+Run dozens of virtual clusters on a single host cluster:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: false  # Pseudo nodes for maximum density
+
+controlPlane:
+  coredns:
+    embedded: true  # Reduce pod overhead
+  statefulSet:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+```
+
+### Sleep Inactive Clusters
+
+For long-running dev environments, enable sleep mode (requires vCluster Platform):
+
+```yaml
+sleep:
+  afterInactivity: 1h
+```
+
+### Use Spot Instances
+
+Run test clusters on cheap spot/preemptible nodes:
+
+```bash
+kubectl label nodes spot-node-1 spot-node-2 workload=ci-tests
+```
+
+```yaml
+controlPlane:
+  statefulSet:
+    scheduling:
+      nodeSelector:
+        workload: ci-tests
+      tolerations:
+        - key: spot
+          operator: Exists
+```
+
+## Performance Tips
+
+1. **Use embedded database** for dev/test - Faster startup than external databases
+2. **Disable persistence** for CI/CD - Ephemeral clusters don't need PVCs
+3. **Use embedded CoreDNS** - Reduces pod count and startup time
+4. **Pre-warm host cluster** - Keep base images cached on nodes
+5. **Parallelize tests** - Run multiple test suites in separate vClusters simultaneously
+
+## Related Resources
+
+- [Get Started Guide](/vcluster/get-started)
+- [CI/CD Integration](/vcluster/integrations/cicd)
+- [Cost Optimization](/vcluster/cost-savings)
+- [Architecture: Shared Nodes](/vcluster/introduction/architecture/shared-nodes)

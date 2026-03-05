@@ -1,0 +1,687 @@
+---
+title: Network Policies
+description: Configure network isolation for vCluster workloads using Kubernetes NetworkPolicies
+---
+
+Network policies provide network-level isolation for vCluster workloads. This page explains how to configure and manage network policies to secure communication between vCluster components and workloads.
+
+## Overview
+
+vCluster supports Kubernetes NetworkPolicy resources to control traffic flow:
+
+1. **Built-in Network Policies**: Automatically created policies for vCluster components
+2. **Virtual Cluster Network Policies**: User-defined policies within the vCluster
+3. **Host Cluster Network Policies**: Additional policies in the host namespace
+
+## Built-in Network Policies
+
+vCluster can automatically create network policies to isolate control plane and workload traffic.
+
+### Enable Network Policies
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    labels:
+      # Custom labels for network policies
+      environment: production
+    annotations:
+      # Custom annotations
+      description: "vCluster network isolation"
+```
+
+### Workload Network Policy
+
+The workload network policy controls traffic for synced pods:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vc-work-my-vcluster
+  namespace: vcluster-namespace
+spec:
+  podSelector:
+    matchLabels:
+      vcluster.loft.sh/managed-by: my-vcluster
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  egress:
+    # Allow egress to vCluster DNS and API server
+    - ports:
+        - port: 1053
+          protocol: UDP
+        - port: 1053
+          protocol: TCP
+        - port: 8443
+          protocol: TCP
+      to:
+        - podSelector:
+            matchLabels:
+              release: my-vcluster
+    
+    # Allow egress to other vCluster workloads
+    - to:
+        - podSelector:
+            matchLabels:
+              vcluster.loft.sh/managed-by: my-vcluster
+    
+    # Allow public egress
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32  # Block cloud metadata
+  
+  ingress:
+    # Allow ingress from vCluster control plane
+    - from:
+        - podSelector:
+            matchLabels:
+              release: my-vcluster
+    
+    # Allow ingress from other vCluster workloads
+    - from:
+        - podSelector:
+            matchLabels:
+              vcluster.loft.sh/managed-by: my-vcluster
+```
+
+From `chart/templates/networkpolicy.yaml`:
+
+```yaml
+egress:
+  # Allow egress to vcluster DNS and control plane.
+  - ports:
+      - port: 1053
+        protocol: UDP
+      - port: 1053
+        protocol: TCP
+      - port: 8443
+        protocol: TCP
+    to:
+      - podSelector:
+          matchLabels:
+            release: {{ .Release.Name | quote }}
+
+  # Allow egress to other vcluster workloads, including coredns when not embedded.
+  - to:
+      - podSelector:
+          matchLabels:
+            vcluster.loft.sh/managed-by: {{ .Release.Name | quote }}
+```
+
+### Control Plane Network Policy
+
+The control plane network policy secures the vCluster API server and controllers:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vc-cp-my-vcluster
+  namespace: vcluster-namespace
+spec:
+  podSelector:
+    matchLabels:
+      release: my-vcluster
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  egress:
+    # Allow egress to host kube-dns
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: 'kube-system'
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+    
+    # Allow egress to host API server
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+    
+    # Allow egress to vCluster peers (for HA etcd)
+    - to:
+        - podSelector:
+            matchLabels:
+              release: my-vcluster
+    
+    # Allow egress to vCluster workloads
+    - to:
+        - podSelector:
+            matchLabels:
+              vcluster.loft.sh/managed-by: my-vcluster
+  
+  ingress:
+    # Allow ingress from vCluster control plane peers
+    - from:
+        - podSelector:
+            matchLabels:
+              release: my-vcluster
+    
+    # Allow ingress from vCluster workloads
+    - ports:
+        - port: 8443
+          protocol: TCP
+        - port: 1053
+          protocol: UDP
+        - port: 1053
+          protocol: TCP
+      from:
+        - podSelector:
+            matchLabels:
+              vcluster.loft.sh/managed-by: my-vcluster
+```
+
+### CoreDNS Network Policy
+
+When CoreDNS runs as a separate deployment (not embedded):
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vc-kube-dns-my-vcluster
+  namespace: vcluster-namespace
+spec:
+  podSelector:
+    matchLabels:
+      k8s-app: vcluster-kube-dns
+      vcluster.loft.sh/managed-by: my-vcluster
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  egress:
+    # Allow egress to host kube-dns
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: 'kube-system'
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+    
+    # Allow egress to vCluster API server
+    - ports:
+        - port: 8443
+          protocol: TCP
+      to:
+        - podSelector:
+            matchLabels:
+              release: my-vcluster
+  
+  ingress:
+    # Allow ingress from vCluster workloads
+    - ports:
+        - port: 1053
+          protocol: TCP
+        - port: 1053
+          protocol: UDP
+      from:
+        - podSelector:
+            matchLabels:
+              vcluster.loft.sh/managed-by: my-vcluster
+```
+
+## Custom Network Policy Configuration
+
+### Restrict Public Egress
+
+Disable public internet access for workloads:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      publicEgress:
+        enabled: false
+```
+
+Or restrict to specific CIDRs:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      publicEgress:
+        enabled: true
+        cidr: 10.0.0.0/8
+        except:
+          - 10.0.1.0/24  # Block specific subnet
+          - 169.254.169.254/32  # Block metadata service
+```
+
+### Add Custom Egress Rules
+
+Allow egress to specific services:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      egress:
+        # Allow egress to external database
+        - to:
+            - ipBlock:
+                cidr: 192.168.1.100/32
+          ports:
+            - port: 5432
+              protocol: TCP
+        
+        # Allow egress to monitoring service
+        - to:
+            - namespaceSelector:
+                matchLabels:
+                  name: monitoring
+              podSelector:
+                matchLabels:
+                  app: prometheus
+          ports:
+            - port: 9090
+              protocol: TCP
+```
+
+### Add Custom Ingress Rules
+
+Allow ingress from specific sources:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      ingress:
+        # Allow ingress from ingress controller
+        - from:
+            - namespaceSelector:
+                matchLabels:
+                  name: ingress-nginx
+          ports:
+            - port: 8080
+              protocol: TCP
+        
+        # Allow ingress from specific namespace
+        - from:
+            - namespaceSelector:
+                matchLabels:
+                  environment: production
+            - podSelector:
+                matchLabels:
+                  role: frontend
+```
+
+### Control Plane Custom Rules
+
+Add custom rules for control plane traffic:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    controlPlane:
+      egress:
+        # Allow egress to external authentication provider
+        - to:
+            - ipBlock:
+                cidr: 203.0.113.0/24
+          ports:
+            - port: 443
+              protocol: TCP
+      
+      ingress:
+        # Allow ingress from monitoring tools
+        - from:
+            - namespaceSelector:
+                matchLabels:
+                  name: monitoring
+          ports:
+            - port: 8443
+              protocol: TCP
+```
+
+## Virtual Cluster Network Policies
+
+Create network policies inside the vCluster for additional isolation:
+
+```bash
+# Connect to vCluster
+vcluster connect my-vcluster
+
+# Create a namespace
+kubectl create namespace production
+
+# Apply network policy
+kubectl apply -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-from-other-namespaces
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: web
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only allow ingress from same namespace
+    - from:
+        - podSelector: {}
+EOF
+```
+
+### Default Deny Policy
+
+Create a default deny policy:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: production
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+```
+
+### Allow DNS Policy
+
+Allow DNS queries while denying other traffic:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: web
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+```
+
+## Network Policy Syncing
+
+vCluster can sync network policies from the virtual cluster to the host cluster.
+
+### Enable Network Policy Syncing
+
+```yaml
+sync:
+  toHost:
+    networkPolicies:
+      enabled: true
+```
+
+From `pkg/controllers/resources/networkpolicies/syncer.go`:
+
+```go
+func (s *networkPolicySyncer) SyncToHost(ctx *synccontext.SyncContext, event *synccontext.SyncToHostEvent[*networkingv1.NetworkPolicy]) (ctrl.Result, error) {
+    // Translate virtual network policy to host
+    pObj := s.translate(ctx, event.Virtual)
+    
+    // Apply patches if configured
+    err := pro.ApplyPatchesHostObject(ctx, nil, pObj, event.Virtual, ctx.Config.Sync.ToHost.NetworkPolicies.Patches, false)
+    if err != nil {
+        return ctrl.Result{}, err
+    }
+    
+    // Create in host cluster
+    return patcher.CreateHostObject(ctx, event.Virtual, pObj, s.EventRecorder(), false)
+}
+```
+
+### Network Policy Translation
+
+Network policies are translated with name mangling:
+
+```yaml
+# Virtual cluster network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: web
+
+# Translated to host cluster
+metadata:
+  name: allow-frontend-x-production-x-my-vcluster
+  namespace: vcluster-namespace
+spec:
+  podSelector:
+    matchLabels:
+      # Labels are also translated
+      app: web-x-production-x-my-vcluster
+```
+
+### Apply Patches to Synced Policies
+
+```yaml
+sync:
+  toHost:
+    networkPolicies:
+      enabled: true
+      patches:
+        - op: add
+          path: /metadata/labels/team
+          value: platform
+```
+
+## CNI Requirements
+
+Network policies require a CNI plugin that supports them:
+
+- **Calico**: Full network policy support
+- **Cilium**: Advanced network policies with L7 support
+- **Weave Net**: Basic network policy support
+- **Antrea**: NetworkPolicy and Antrea-specific policies
+
+<Warning>
+Basic CNI plugins like Flannel do not support network policies. Network policies will be ignored if your CNI doesn't support them.
+</Warning>
+
+Verify CNI support:
+
+```bash
+# Check CNI plugin
+kubectl get pods -n kube-system -l k8s-app=kube-proxy
+
+# Test network policy enforcement
+kubectl run test-pod --image=nginx
+kubectl apply -f deny-all-policy.yaml
+kubectl run curl-pod --image=curlimages/curl --rm -it -- curl test-pod
+# Should fail if network policies are enforced
+```
+
+## Best Practices
+
+### Always Enable Network Policies in Production
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+```
+
+### Start with Default Deny
+
+Begin with restrictive policies and allow traffic as needed:
+
+```yaml
+# Default deny
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+```
+
+### Block Cloud Metadata Services
+
+Prevent access to cloud provider metadata:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      publicEgress:
+        enabled: true
+        cidr: 0.0.0.0/0
+        except:
+          - 169.254.169.254/32  # AWS, Azure, GCP metadata
+          - 100.100.100.200/32  # Alibaba Cloud metadata
+```
+
+### Use Namespace Selectors
+
+Isolate by namespace:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-same-namespace
+spec:
+  podSelector: {}
+  ingress:
+    - from:
+        - podSelector: {}  # Same namespace only
+```
+
+### Monitor Network Policy Violations
+
+Use CNI-specific tools to monitor policy violations:
+
+```bash
+# Calico
+calicoctl get networkpolicy --all-namespaces
+calicoctl get globalnetworkpolicy
+
+# Cilium
+cilium monitor --type drop
+cilium policy get
+```
+
+### Test Network Policies
+
+Test policies before applying to production:
+
+```bash
+# Create test pods
+kubectl run client --image=nicolaka/netshoot -- sleep 3600
+kubectl run server --image=nginx
+
+# Test connectivity
+kubectl exec client -- curl server
+
+# Apply policy
+kubectl apply -f network-policy.yaml
+
+# Test again (should fail)
+kubectl exec client -- curl server
+```
+
+## Troubleshooting
+
+### Network Policies Not Enforced
+
+Verify CNI supports network policies:
+
+```bash
+# Check CNI
+kubectl get pods -n kube-system -l k8s-app=calico-node
+
+# Verify network policy controller
+kubectl logs -n kube-system -l k8s-app=calico-kube-controllers
+```
+
+### Workloads Cannot Connect
+
+Check network policy configuration:
+
+```bash
+# List all network policies
+kubectl get networkpolicies --all-namespaces
+
+# Describe specific policy
+kubectl describe networkpolicy vc-work-my-vcluster -n vcluster-namespace
+
+# Check pod labels match selectors
+kubectl get pods --show-labels -n vcluster-namespace
+```
+
+### DNS Resolution Fails
+
+Ensure DNS traffic is allowed:
+
+```yaml
+egress:
+  - to:
+      - podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+    ports:
+      - port: 53
+        protocol: UDP
+      - port: 53
+        protocol: TCP
+```
+
+### Control Plane Connectivity Issues
+
+Verify control plane can reach host API:
+
+```bash
+# Check control plane logs
+kubectl logs -n vcluster-namespace -l release=my-vcluster
+
+# Verify egress rules allow host API
+kubectl describe networkpolicy vc-cp-my-vcluster -n vcluster-namespace
+```
+
+## Further Reading
+
+- [Multi-Tenancy Isolation](/security/isolation)
+- [RBAC Configuration](/security/rbac)
+- [Kubernetes Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
+- [Calico Network Policy](https://projectcalico.docs.tigera.io/security/calico-network-policy)
+- [Cilium Network Policy](https://docs.cilium.io/en/stable/policy/)

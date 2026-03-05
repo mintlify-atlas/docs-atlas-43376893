@@ -1,0 +1,97 @@
+---
+title: "vcluster node"
+description: "Manage virtual cluster nodes"
+---
+
+## Synopsis
+
+Manage nodes in a virtual cluster.
+
+```bash
+vcluster node [command] [flags]
+```
+
+## Subcommands
+
+- `join` - Join a node to a virtual cluster
+- `delete` - Remove a node from a virtual cluster
+
+## vcluster node join
+
+Join a physical node to a virtual cluster (used with private nodes or standalone mode).
+
+### Synopsis
+
+```bash
+vcluster node join [flags]
+```
+
+### Examples
+
+```bash
+# Join node to vCluster (run on the node)
+vcluster node join \
+  --server https://vcluster.example.com:443 \
+  --token eyJhbGc...
+
+# Join with custom kubelet config
+vcluster node join \
+  --server https://vcluster.example.com:443 \
+  --token eyJhbGc... \
+  --kubelet-config /etc/kubelet/config.yaml
+```
+
+### Flags
+
+<ParamField path="--server" type="string" required>
+  The vCluster API server URL.
+</ParamField>
+
+<ParamField path="--token" type="string" required>
+  Bootstrap token for joining.
+</ParamField>
+
+<ParamField path="--kubelet-config" type="string">
+  Path to kubelet configuration file.
+</ParamField>
+
+<ParamField path="--kubelet-extra-args" type="string">
+  Additional kubelet arguments.
+</ParamField>
+
+## Getting Join Tokens
+
+To get a join token from your vCluster:
+
+```bash
+# Connect to vCluster
+vcluster connect my-vcluster -n team-x
+
+# Create token
+vcluster token create node-join-token
+```
+
+## Complete Example
+
+### Private Nodes Setup
+
+```bash
+# On control plane
+vcluster create my-vcluster -n team-x --values private-nodes.yaml
+
+# Get join command
+vcluster token create node-join
+
+# On worker node
+curl -L https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-linux-amd64 -o /usr/local/bin/vcluster
+chmod +x /usr/local/bin/vcluster
+
+vcluster node join \
+  --server https://my-vcluster.example.com:443 \
+  --token <token-from-above>
+```
+
+## See Also
+
+- [Private Nodes Architecture](/architecture/private-nodes) - Private nodes documentation
+- [vcluster token](/cli/token) - Token management

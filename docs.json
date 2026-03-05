@@ -1,122 +1,154 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "vCluster",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#040c24",
+    "light": "#f96609",
+    "dark": "#efb87a"
   },
-  "favicon": "/favicon.svg",
+  "favicon": "https://media.brand.dev/b216d49f-c80d-43a0-ba01-739c256b3bfe.png",
+  "logo": {
+    "light": "https://media.brand.dev/b4f6a02b-2808-4cb4-ba2d-c1a31e4e66e1.svg",
+    "dark": "https://media.brand.dev/b4f6a02b-2808-4cb4-ba2d-c1a31e4e66e1.svg"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/loft-sh/vcluster"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/loft-sh/vcluster",
+      "x": "https://x.com/vcluster",
+      "linkedin": "https://www.linkedin.com/company/vcluster"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Architecture",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "architecture/overview",
+              "architecture/virtual-clusters",
+              "architecture/shared-nodes",
+              "architecture/dedicated-nodes",
+              "architecture/private-nodes",
+              "architecture/standalone-mode",
+              "architecture/auto-nodes"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Deployment",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "deployment/helm-installation",
+              "deployment/configuration",
+              "deployment/high-availability",
+              "deployment/networking",
+              "deployment/storage"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Operations",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "operations/managing-vclusters",
+              "operations/pause-resume",
+              "operations/snapshots",
+              "operations/backup-restore",
+              "operations/upgrading",
+              "operations/monitoring",
+              "operations/troubleshooting"
+            ]
+          },
+          {
+            "group": "Resource Syncing",
+            "pages": [
+              "syncing/overview",
+              "syncing/to-host",
+              "syncing/from-host",
+              "syncing/custom-resources"
+            ]
+          },
+          {
+            "group": "Use Cases",
+            "pages": [
+              "use-cases/multi-tenancy",
+              "use-cases/gpu-platforms",
+              "use-cases/development-testing",
+              "use-cases/cost-optimization"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/isolation",
+              "security/rbac",
+              "security/certificates",
+              "security/network-policies"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/cert-manager",
+              "integrations/external-secrets",
+              "integrations/metrics-server",
+              "integrations/istio"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "CLI Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Commands",
             "pages": [
-              "api-reference/introduction"
+              "cli/overview",
+              "cli/create",
+              "cli/connect",
+              "cli/list",
+              "cli/delete",
+              "cli/pause",
+              "cli/resume",
+              "cli/upgrade",
+              "cli/snapshot",
+              "cli/restore",
+              "cli/node",
+              "cli/token",
+              "cli/debug"
             ]
-          },
+          }
+        ]
+      },
+      {
+        "tab": "Configuration",
+        "groups": [
           {
-            "group": "Endpoint examples",
+            "group": "Reference",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "config/values-reference",
+              "config/control-plane",
+              "config/sync-configuration",
+              "config/networking-options",
+              "config/storage-options",
+              "config/rbac-configuration"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

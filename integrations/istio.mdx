@@ -1,0 +1,703 @@
+---
+title: "Istio Integration"
+description: "Integrate vCluster with Istio service mesh to enable advanced traffic management, security, and observability"
+---
+
+## Overview
+
+The Istio integration enables vCluster to work seamlessly with Istio service mesh running on the host cluster. It automatically syncs Istio-specific custom resources from the virtual cluster to the host cluster, allowing you to configure traffic management, security policies, and observability for your virtual cluster workloads.
+
+<Note>
+**Key Benefits:**
+- Leverage host cluster's Istio control plane
+- Configure service mesh policies from within virtual clusters
+- Apply traffic management rules to virtual cluster services
+- Enable mTLS and advanced security features
+- Access Istio observability features (tracing, metrics)
+</Note>
+
+<Warning>
+The Istio integration is **not supported in private nodes mode**. It requires the shared or dedicated nodes architecture where workloads run as pods in the host cluster.
+</Warning>
+
+## How It Works
+
+The integration syncs Istio networking resources from the virtual cluster to the host cluster:
+
+**From Virtual Cluster → Host Cluster:**
+- `DestinationRules` - Traffic policies for services (load balancing, circuit breaking, etc.)
+- `Gateways` - Configuration for ingress/egress gateways
+- `VirtualServices` - Traffic routing rules and request handling
+
+Resources are synced with proper namespace translation to ensure they reference the correct host cluster services while maintaining isolation between virtual clusters.
+
+## Prerequisites
+
+1. **Istio must be installed on the host cluster**
+   ```bash
+   # Install Istio using istioctl
+   istioctl install --set profile=default -y
+   ```
+
+2. **Verify Istio is running**
+   ```bash
+   kubectl get pods -n istio-system
+   ```
+
+3. **Ensure Istio CRDs are installed**
+   ```bash
+   kubectl get crd | grep istio.io
+   ```
+
+4. **Enable automatic sidecar injection in the host namespace (optional but recommended)**
+   ```bash
+   kubectl label namespace team-x istio-injection=enabled
+   ```
+
+## Setup Instructions
+
+### Basic Configuration
+
+Enable the Istio integration:
+
+```yaml values.yaml
+integrations:
+  istio:
+    enabled: true
+```
+
+Deploy your vCluster:
+
+```bash
+vcluster create my-vcluster -n team-x -f values.yaml
+```
+
+### Advanced Configuration
+
+Customize which Istio resources to sync:
+
+```yaml values.yaml
+integrations:
+  istio:
+    enabled: true
+    sync:
+      toHost:
+        # Sync DestinationRules
+        destinationRules:
+          enabled: true
+        # Sync Gateways
+        gateways:
+          enabled: true
+        # Sync VirtualServices
+        virtualServices:
+          enabled: true
+```
+
+### Syncing Specific Resources Only
+
+If you only need certain Istio resources:
+
+```yaml values.yaml
+integrations:
+  istio:
+    enabled: true
+    sync:
+      toHost:
+        destinationRules:
+          enabled: false  # Disable if not needed
+        gateways:
+          enabled: true   # Only sync gateways
+        virtualServices:
+          enabled: true   # Only sync virtual services
+```
+
+## Usage Examples
+
+### Configuring a VirtualService
+
+Create a VirtualService to route traffic within your virtual cluster:
+
+```yaml virtual-service.yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: my-app
+  namespace: default
+spec:
+  hosts:
+  - my-app
+  http:
+  - match:
+    - headers:
+        x-version:
+          exact: v2
+    route:
+    - destination:
+        host: my-app
+        subset: v2
+  - route:
+    - destination:
+        host: my-app
+        subset: v1
+```
+
+Apply the VirtualService:
+
+```bash
+kubectl apply -f virtual-service.yaml
+```
+
+The integration automatically syncs this to the host cluster with proper namespace translation.
+
+### Creating DestinationRules
+
+Define traffic policies for your services:
+
+```yaml destination-rule.yaml
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: my-app
+  namespace: default
+spec:
+  host: my-app
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutiveErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+  - name: v2
+    labels:
+      version: v2
+```
+
+```bash
+kubectl apply -f destination-rule.yaml
+```
+
+### Configuring an Ingress Gateway
+
+Expose services outside the virtual cluster using an Istio Gateway:
+
+```yaml gateway.yaml
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: my-app-gateway
+  namespace: default
+spec:
+  selector:
+    istio: ingressgateway  # Use the host cluster's ingress gateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "my-app.example.com"
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: my-app-tls-cert
+    hosts:
+    - "my-app.example.com"
+```
+
+Combine with a VirtualService for routing:
+
+```yaml gateway-virtualservice.yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: my-app-gateway
+  namespace: default
+spec:
+  hosts:
+  - "my-app.example.com"
+  gateways:
+  - my-app-gateway
+  http:
+  - match:
+    - uri:
+        prefix: /api/v1
+    route:
+    - destination:
+        host: my-app
+        port:
+          number: 8080
+```
+
+```bash
+kubectl apply -f gateway.yaml
+kubectl apply -f gateway-virtualservice.yaml
+```
+
+### Canary Deployment with Traffic Splitting
+
+Gradually shift traffic from v1 to v2:
+
+```yaml canary-virtualservice.yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: my-app-canary
+  namespace: default
+spec:
+  hosts:
+  - my-app
+  http:
+  - route:
+    - destination:
+        host: my-app
+        subset: v1
+      weight: 90
+    - destination:
+        host: my-app
+        subset: v2
+      weight: 10
+```
+
+```bash
+kubectl apply -f canary-virtualservice.yaml
+```
+
+Gradually increase v2 weight:
+
+```bash
+# 50/50 split
+kubectl patch virtualservice my-app-canary --type merge -p '{
+  "spec": {
+    "http": [{
+      "route": [
+        {"destination": {"host": "my-app", "subset": "v1"}, "weight": 50},
+        {"destination": {"host": "my-app", "subset": "v2"}, "weight": 50}
+      ]
+    }]
+  }
+}'
+```
+
+### Fault Injection for Testing
+
+Test application resilience with fault injection:
+
+```yaml fault-injection.yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: my-app-fault-injection
+  namespace: default
+spec:
+  hosts:
+  - my-app
+  http:
+  - fault:
+      delay:
+        percentage:
+          value: 10
+        fixedDelay: 5s
+      abort:
+        percentage:
+          value: 5
+        httpStatus: 500
+    route:
+    - destination:
+        host: my-app
+```
+
+### Mutual TLS Configuration
+
+Enable mTLS for specific services:
+
+```yaml mtls-destination-rule.yaml
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: my-app-mtls
+  namespace: default
+spec:
+  host: my-app
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+```
+
+## Validation
+
+### 1. Verify Resources Are Synced
+
+```bash
+# In virtual cluster
+kubectl get virtualservices,destinationrules,gateways
+
+# Switch to host cluster
+vcluster disconnect
+
+# Check synced resources
+kubectl get virtualservices,destinationrules,gateways -n team-x
+```
+
+You should see resources with translated names like:
+```
+my-app-x-default-x-my-vcluster
+```
+
+### 2. Check Istio Configuration Status
+
+```bash
+# Analyze Istio configuration
+istioctl analyze -n team-x
+
+# Check proxy status
+istioctl proxy-status
+```
+
+### 3. Verify Traffic Routing
+
+Test that traffic rules are applied:
+
+```bash
+# From within virtual cluster
+kubectl run test-pod --image=curlimages/curl --rm -i --tty -- sh
+
+# Inside the pod
+curl -H "x-version: v2" http://my-app/
+```
+
+### 4. View Istio Metrics
+
+Check if Istio is collecting metrics:
+
+```bash
+# Query Prometheus for metrics
+kubectl port-forward -n istio-system svc/prometheus 9090:9090
+
+# Open browser to http://localhost:9090
+# Query: istio_requests_total{destination_service_name="my-app"}
+```
+
+### 5. Check Sidecar Injection
+
+```bash
+# Verify pods have Envoy sidecar
+kubectl get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[*].name}{"\n"}{end}'
+```
+
+Healthy output should show two containers:
+```
+my-app-7854ff8877-k2qvw    my-app istio-proxy
+```
+
+## Common Issues and Solutions
+
+### Issue: Sidecar Not Injected
+
+**Symptoms:** Pods don't have the istio-proxy container
+
+**Solution:**
+1. Enable sidecar injection for the host namespace:
+   ```bash
+   kubectl label namespace team-x istio-injection=enabled
+   ```
+
+2. Recreate pods in virtual cluster:
+   ```bash
+   kubectl rollout restart deployment/my-app
+   ```
+
+3. Or use pod annotations:
+   ```yaml
+   metadata:
+     annotations:
+       sidecar.istio.io/inject: "true"
+   ```
+
+### Issue: VirtualService Not Working
+
+**Symptoms:** Traffic routing rules not applied
+
+**Solution:**
+1. Check if the resource is synced:
+   ```bash
+   vcluster disconnect
+   kubectl get virtualservice -n team-x
+   ```
+
+2. Analyze Istio configuration:
+   ```bash
+   istioctl analyze -n team-x
+   ```
+
+3. Check for naming conflicts:
+   ```bash
+   kubectl describe virtualservice my-app-x-default-x-my-vcluster -n team-x
+   ```
+
+4. Verify service exists:
+   ```bash
+   kubectl get svc my-app
+   ```
+
+### Issue: Gateway Not Accessible
+
+**Symptoms:** Cannot access service through Istio gateway
+
+**Solution:**
+1. Verify gateway selector matches the ingress gateway:
+   ```bash
+   kubectl get gateway my-app-gateway -o yaml
+   kubectl get pods -n istio-system -l istio=ingressgateway
+   ```
+
+2. Check gateway service:
+   ```bash
+   kubectl get svc -n istio-system istio-ingressgateway
+   ```
+
+3. Get the gateway external IP:
+   ```bash
+   export GATEWAY_URL=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+   curl -H "Host: my-app.example.com" http://$GATEWAY_URL/
+   ```
+
+### Issue: Integration Conflicts
+
+**Error:** `istio integration is enabled but istio custom resource is also set in sync.toHost.customResources`
+
+**Solution:**
+Remove manual Istio CRD configuration:
+
+```yaml
+# ❌ Don't do this when integration is enabled
+sync:
+  toHost:
+    customResources:
+      virtualservices.networking.istio.io:
+        enabled: true
+
+# ✅ Use integration instead
+integrations:
+  istio:
+    enabled: true
+```
+
+### Issue: Certificate/TLS Errors
+
+**Symptoms:** HTTPS requests fail with certificate errors
+
+**Solution:**
+1. Verify the certificate secret exists:
+   ```bash
+   kubectl get secret my-app-tls-cert -n istio-system
+   ```
+
+2. Check if cert-manager integration is enabled:
+   ```yaml
+   integrations:
+     certManager:
+       enabled: true
+   ```
+
+3. Recreate the gateway after certificate is ready
+
+### Issue: Metrics Not Appearing
+
+**Symptoms:** No metrics in Prometheus/Grafana for virtual cluster services
+
+**Solution:**
+1. Ensure sidecars are injected (see above)
+2. Verify Prometheus is scraping the namespace:
+   ```bash
+   kubectl get servicemonitor -n team-x
+   ```
+
+3. Check if pods are labeled correctly:
+   ```bash
+   kubectl get pods --show-labels
+   ```
+
+## Configuration Reference
+
+Complete configuration options from `chart/values.yaml:991-1002`:
+
+```yaml
+integrations:
+  istio:
+    # Enable/disable the Istio integration
+    enabled: false
+    
+    # Configure resource syncing
+    sync:
+      toHost:
+        # Sync DestinationRules from virtual to host cluster
+        destinationRules:
+          enabled: true
+        
+        # Sync Gateways from virtual to host cluster
+        gateways:
+          enabled: true
+        
+        # Sync VirtualServices from virtual to host cluster
+        virtualServices:
+          enabled: true
+```
+
+Source code reference: `pkg/pro/istio.go` (applies Istio-specific patches)
+
+## Best Practices
+
+1. **Use Namespace-Specific Gateways**
+   - Create gateways within your virtual cluster namespace
+   - Avoid modifying shared host cluster gateways
+   - Use unique hostnames per virtual cluster
+
+2. **Implement Progressive Delivery**
+   - Start with small traffic percentages for canary deployments
+   - Monitor metrics before increasing traffic
+   - Use DestinationRules for circuit breaking
+
+3. **Secure Service-to-Service Communication**
+   - Enable mTLS for sensitive services
+   - Use PeerAuthentication policies
+   - Implement authorization policies
+
+4. **Monitor and Observe**
+   - Use Istio's built-in observability features
+   - Check Kiali for service topology
+   - Monitor Envoy metrics in Prometheus
+
+5. **Test Resilience**
+   - Use fault injection to test error handling
+   - Implement retry and timeout policies
+   - Test circuit breaker behavior
+
+6. **Version Your APIs**
+   - Use subsets in DestinationRules for versioning
+   - Implement header-based routing
+   - Maintain backward compatibility
+
+## Example: Complete Microservices Setup
+
+Deploy a complete service mesh configuration:
+
+```yaml complete-istio-setup.yaml
+# Gateway for external traffic
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: app-gateway
+  namespace: production
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: app-tls-cert
+    hosts:
+    - "*.myapp.example.com"
+---
+# Frontend service routing
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: frontend
+  namespace: production
+spec:
+  hosts:
+  - "www.myapp.example.com"
+  gateways:
+  - app-gateway
+  http:
+  - route:
+    - destination:
+        host: frontend
+        port:
+          number: 80
+---
+# API service with traffic splitting
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: api
+  namespace: production
+spec:
+  hosts:
+  - "api.myapp.example.com"
+  gateways:
+  - app-gateway
+  http:
+  - match:
+    - headers:
+        x-api-version:
+          exact: v2
+    route:
+    - destination:
+        host: api
+        subset: v2
+  - route:
+    - destination:
+        host: api
+        subset: v1
+      weight: 80
+    - destination:
+        host: api
+        subset: v2
+      weight: 20
+---
+# Traffic policies
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: api
+  namespace: production
+spec:
+  host: api
+  trafficPolicy:
+    loadBalancer:
+      consistentHash:
+        httpHeaderName: x-user-id
+    connectionPool:
+      http:
+        http2MaxRequests: 100
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+  - name: v2
+    labels:
+      version: v2
+```
+
+## Related Resources
+
+- [Istio Documentation](https://istio.io/latest/docs/)
+- [Istio Traffic Management](https://istio.io/latest/docs/concepts/traffic-management/)
+- [Istio Security](https://istio.io/latest/docs/concepts/security/)
+- [vCluster Syncing Overview](/syncing/overview)
+- [Custom Resource Syncing](/syncing/custom-resources)
+- [Integration Source Code](https://github.com/loft-sh/vcluster/tree/main/pkg/pro)

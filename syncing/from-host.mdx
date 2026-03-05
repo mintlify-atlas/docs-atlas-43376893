@@ -1,0 +1,449 @@
+---
+title: Syncing From Host
+description: Configure resources to sync from host cluster to virtual cluster
+---
+
+Some resources need to flow from the host cluster into the virtual cluster. This is primarily used for cluster-level resources that workloads need to discover, such as storage classes, nodes, and CSI resources.
+
+## How From-Host Syncing Works
+
+From-host syncing follows a different pattern than to-host syncing:
+
+1. The syncer watches for resources in the host cluster (or specific namespaces)
+2. When a matching resource is found, it's copied into the virtual cluster
+3. The virtual copy is kept in sync with the host original
+4. When the host resource is deleted, the virtual copy is removed
+
+The implementation is in `pkg/syncer/from_host_syncer.go:102`:
+
+```go
+func (s *genericFromHostSyncer) SyncToVirtual(ctx *synccontext.SyncContext, event *synccontext.SyncToVirtualEvent[client.Object]) (ctrl.Result, error) {
+    vObj := translate.VirtualMetadata(event.Host, s.HostToVirtual(...))
+    // Copy fields from host to virtual
+    return patcher.CreateVirtualObject(ctx, event.Host, vObj, ...)
+}
+```
+
+## Default Synced Resources
+
+### Events
+
+**Enabled by default** - Syncs events from host to virtual cluster so users can see what's happening with their workloads.
+
+```yaml
+sync:
+  fromHost:
+    events:
+      enabled: true
+```
+
+Events related to synced resources (Pods, PVCs, etc.) are automatically imported into the virtual cluster.
+
+### Storage Resources (Auto-Enabled)
+
+These resources are automatically enabled when the virtual scheduler is enabled:
+
+```yaml
+sync:
+  fromHost:
+    storageClasses:
+      enabled: auto  # Enabled with virtual scheduler
+    csiDrivers:
+      enabled: auto
+    csiNodes:
+      enabled: auto
+    csiStorageCapacities:
+      enabled: auto
+```
+
+To always enable them:
+```yaml
+sync:
+  fromHost:
+    storageClasses:
+      enabled: true
+    csiDrivers:
+      enabled: true
+    csiNodes:
+      enabled: true
+    csiStorageCapacities:
+      enabled: true
+```
+
+## Optional Resources
+
+These resources can be enabled as needed:
+
+### Nodes
+
+By default, vCluster creates **fake nodes**. You can sync real nodes from the host:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      # Allow syncing changes from virtual to host
+      syncBackChanges: false
+      # Hide image status to prevent image enumeration
+      clearImageStatus: false
+      selector:
+        # Sync all nodes vs only nodes with vCluster pods
+        all: false
+        # Sync only nodes with specific labels
+        labels: {}
+```
+
+**Sync all nodes:**
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        all: true
+```
+
+**Sync nodes with specific labels:**
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          node-role.kubernetes.io/worker: ""
+```
+
+### IngressClasses
+
+```yaml
+sync:
+  fromHost:
+    ingressClasses:
+      enabled: true
+```
+
+Allows virtual cluster users to discover available ingress classes.
+
+### RuntimeClasses
+
+```yaml
+sync:
+  fromHost:
+    runtimeClasses:
+      enabled: true
+```
+
+Useful when using alternative container runtimes like Kata Containers or gVisor.
+
+### PriorityClasses
+
+```yaml
+sync:
+  fromHost:
+    priorityClasses:
+      enabled: true
+```
+
+Imports host cluster priority classes for pod scheduling.
+
+### VolumeSnapshotClasses
+
+```yaml
+sync:
+  fromHost:
+    volumeSnapshotClasses:
+      enabled: true
+```
+
+### DeviceClasses
+
+```yaml
+sync:
+  fromHost:
+    deviceClasses:
+      enabled: true
+```
+
+For Dynamic Resource Allocation (DRA) devices.
+
+## Mapped Resources
+
+Some resources support **namespace mappings** to sync specific resources from host namespaces:
+
+### ConfigMaps
+
+Sync ConfigMaps from specific host namespaces:
+
+```yaml
+sync:
+  fromHost:
+    configMaps:
+      enabled: true
+      mappings:
+        byName:
+          # Sync all ConfigMaps from host namespace to virtual namespace
+          "kube-system/*": "kube-system/*"
+          
+          # Sync specific ConfigMap with same name
+          "default/my-config": "default/my-config"
+          
+          # Sync specific ConfigMap with different name
+          "default/host-config": "default/virtual-config"
+          
+          # Sync from vCluster namespace to virtual namespace
+          "/my-config": "default/my-config"
+          
+          # Sync everything from vCluster namespace
+          "": "imported/*"
+```
+
+**Example mappings:**
+
+```yaml
+sync:
+  fromHost:
+    configMaps:
+      enabled: true
+      mappings:
+        byName:
+          # Import all ConfigMaps from kube-system
+          "kube-system/*": "kube-system/*"
+          # Import a specific monitoring config
+          "monitoring/prometheus-config": "monitoring/prometheus"
+```
+
+### Secrets
+
+Sync Secrets from host to virtual cluster:
+
+```yaml
+sync:
+  fromHost:
+    secrets:
+      enabled: true
+      mappings:
+        byName:
+          # Same wildcard syntax as ConfigMaps
+          "cert-manager/*": "cert-manager/*"
+          "default/registry-creds": "default/registry-creds"
+```
+
+**Example use case - Image pull secrets:**
+
+```yaml
+sync:
+  fromHost:
+    secrets:
+      enabled: true
+      mappings:
+        byName:
+          # Sync image pull secret from host to all virtual namespaces
+          "default/registry-credentials": "default/registry-credentials"
+```
+
+## Mapping Syntax
+
+The `byName` mapping syntax supports these patterns:
+
+| Pattern | Description | Example |
+|---------|-------------|----------|
+| `"namespace/*"` | All resources in namespace | `"kube-system/*": "kube-system/*"` |
+| `"namespace/name"` | Specific resource, same name | `"default/config": "default/config"` |
+| `"namespace/name1"` to different | Specific resource, rename | `"default/host-name": "default/virt-name"` |
+| `""` or `"/name"` | From vCluster namespace | `"/secret": "default/secret"` |
+| `""` with wildcard | All from vCluster namespace | `"": "imported/*"` |
+
+## Configuration Examples
+
+### Basic Setup (Defaults)
+
+```yaml
+sync:
+  fromHost:
+    events:
+      enabled: true
+    storageClasses:
+      enabled: auto
+    csiDrivers:
+      enabled: auto
+    csiNodes:
+      enabled: auto
+    csiStorageCapacities:
+      enabled: auto
+```
+
+### Advanced Node Syncing
+
+Sync real nodes for better resource visibility:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        all: true
+        labels:
+          node-type: worker
+      # Prevent modification of host nodes from virtual cluster
+      syncBackChanges: false
+      # Hide pulled images for security
+      clearImageStatus: true
+```
+
+### Full Storage Integration
+
+Enable all storage-related resources:
+
+```yaml
+sync:
+  fromHost:
+    storageClasses:
+      enabled: true
+    csiDrivers:
+      enabled: true
+    csiNodes:
+      enabled: true
+    csiStorageCapacities:
+      enabled: true
+    volumeSnapshotClasses:
+      enabled: true
+```
+
+### Import Host Configurations
+
+Sync ConfigMaps and Secrets from host:
+
+```yaml
+sync:
+  fromHost:
+    configMaps:
+      enabled: true
+      mappings:
+        byName:
+          "kube-system/coredns": "kube-system/coredns"
+          "monitoring/*": "monitoring/*"
+    secrets:
+      enabled: true
+      mappings:
+        byName:
+          "default/registry-creds": "default/registry-creds"
+          "cert-manager/*": "cert-manager/*"
+```
+
+### Multi-Namespace Mapping
+
+Import resources from multiple host namespaces:
+
+```yaml
+sync:
+  fromHost:
+    configMaps:
+      enabled: true
+      mappings:
+        byName:
+          # Import from multiple namespaces
+          "team-a/*": "team-a/*"
+          "team-b/*": "team-b/*"
+          "shared/*": "shared/*"
+          # Import from vCluster's own namespace
+          "/shared-config": "default/config"
+```
+
+## Implementation Details
+
+### Custom Manager for Mappings
+
+When using namespace mappings, vCluster creates a **custom physical manager** that watches multiple namespaces (`pkg/syncer/from_host_syncer.go:182`):
+
+```go
+func ConfigureNewLocalManager(ctx *synccontext.RegisterContext, mappings map[string]string, syncerName string) (ctrl.Manager, bool, error) {
+    multiNsCacheConfig, customManagerNeeded := vclusterconfig.GetLocalCacheOptionsFromConfigMappings(mappings, ctx.Config.HostNamespace)
+    if !customManagerNeeded {
+        return nil, true, nil
+    }
+    // Create multi-namespace manager
+    localMultiNamespaceManager, err := ctrl.NewManager(ctx.Config.HostConfig, GetOptionsForMultiNamespaceManager(ctx, multiNsCacheConfig))
+    // ...
+}
+```
+
+This allows vCluster to efficiently watch resources across multiple host namespaces.
+
+### Resource Copying
+
+The from-host syncer copies specific fields from host to virtual resources (`pkg/controllers/resources/configmaps/from_host_syncer.go:36`):
+
+```go
+func (s *syncToHostConfigMapSyncer) CopyHostObjectToVirtual(vObj, pObj client.Object) {
+    vCm := vObj.(*corev1.ConfigMap)
+    hostCopy := pObj.(*corev1.ConfigMap).DeepCopy()
+    vCm.SetAnnotations(hostCopy.GetAnnotations())
+    vCm.SetLabels(hostCopy.Labels)
+    vCm.Data = hostCopy.Data
+}
+```
+
+Only necessary fields are copied to maintain consistency.
+
+## Troubleshooting
+
+### Resource Not Appearing in Virtual Cluster
+
+1. **Verify resource exists in host cluster:**
+   ```bash
+   kubectl get storageclass
+   ```
+
+2. **Check syncing is enabled:**
+   ```bash
+   helm get values my-vcluster -n vcluster-my-vcluster
+   ```
+
+3. **Check vCluster logs:**
+   ```bash
+   kubectl logs -n vcluster-my-vcluster deploy/my-vcluster -f | grep -i "storageclass"
+   ```
+
+4. **Verify RBAC permissions:**
+   ```bash
+   kubectl get clusterrole vc-my-vcluster -o yaml
+   ```
+
+### Mapped Resources Not Syncing
+
+1. **Check namespace permissions**: The vCluster service account needs read access to mapped namespaces
+
+2. **Verify mapping syntax**: Ensure `byName` mappings are correct
+
+3. **Check for errors in logs**:
+   ```bash
+   kubectl logs -n vcluster-my-vcluster deploy/my-vcluster -f | grep "mapping"
+   ```
+
+### Events Not Showing Up
+
+Events are filtered to only show events related to synced resources. If a Pod is synced to the host, its events will be synced back to the virtual cluster.
+
+## Security Considerations
+
+1. **Namespace access**: Mapped resources require additional RBAC permissions in host namespaces
+2. **Secret exposure**: Be cautious when syncing secrets from host to virtual cluster
+3. **Node information**: Consider using `clearImageStatus: true` to hide container images
+4. **Sync back changes**: Keep `syncBackChanges: false` for nodes unless specifically needed
+
+## Best Practices
+
+1. **Start with defaults**: The auto-enabled storage resources are usually sufficient
+2. **Use specific mappings**: Avoid wildcards like `"*/*"` that sync everything
+3. **Limit node syncing**: Use `selector.all: false` and `selector.labels` to sync only needed nodes
+4. **Monitor permissions**: Ensure vCluster has appropriate RBAC for mapped namespaces
+5. **Document mappings**: Keep track of what's being synced and why
+
+## Next Steps
+
+- Learn about [syncing to the host cluster](/syncing/to-host)
+- Configure [custom resource syncing](/syncing/custom-resources)
+- Review [RBAC configuration](/configure/vcluster-yaml/rbac/overview)

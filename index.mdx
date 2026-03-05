@@ -1,97 +1,404 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "vCluster Documentation"
+description: "Create fully functional virtual Kubernetes clusters that run inside namespaces with flexible tenancy options"
+mode: "custom"
 ---
 
-## Setting up
+<div className="relative overflow-hidden bg-gradient-to-br from-[#040c24] via-[#0a1432] to-[#040c24] dark:from-[#040c24] dark:via-[#0a1432] dark:to-[#040c24] py-20">
+  <div className="max-w-7xl mx-auto px-6 lg:px-8">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
+      <div className="lg:col-span-7">
+        <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-white mb-6">
+          Virtual Kubernetes Clusters Made Simple
+        </h1>
+        <p className="text-lg sm:text-xl text-gray-300 dark:text-gray-300 max-w-2xl mb-8">
+          Deploy isolated Kubernetes environments inside namespaces. Get full cluster capabilities with flexible tenancy—from shared infrastructure to bare metal deployments.
+        </p>
+        <div className="flex flex-wrap gap-4">
+          <a 
+            href="/quickstart" 
+            className="inline-flex items-center px-6 py-3 rounded-lg bg-[#f96609] hover:bg-[#e05508] text-white font-semibold transition-colors no-underline"
+          >
+            Get Started
+            <svg className="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+            </svg>
+          </a>
+          <a 
+            href="/architecture/overview" 
+            className="inline-flex items-center px-6 py-3 rounded-lg border border-white/30 bg-white/10 hover:bg-white/20 text-white font-semibold transition-colors no-underline"
+          >
+            Explore Architecture
+          </a>
+        </div>
+      </div>
+      <div className="lg:col-span-5 hidden lg:block">
+        <div className="relative">
+          <div className="absolute inset-0 bg-gradient-to-r from-[#f96609]/20 to-[#efb87a]/20 rounded-2xl blur-3xl"></div>
+          <div className="relative bg-[#0a1432]/80 backdrop-blur-sm rounded-2xl p-6 border border-white/10">
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 rounded-full bg-[#f96609]"></div>
+                <div className="h-4 bg-white/20 rounded w-32"></div>
+              </div>
+              <div className="flex items-center gap-3 ml-6">
+                <div className="w-2 h-2 rounded-full bg-[#efb87a]"></div>
+                <div className="h-3 bg-white/15 rounded w-40"></div>
+              </div>
+              <div className="flex items-center gap-3 ml-6">
+                <div className="w-2 h-2 rounded-full bg-[#efb87a]"></div>
+                <div className="h-3 bg-white/15 rounded w-36"></div>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 rounded-full bg-[#f96609]"></div>
+                <div className="h-4 bg-white/20 rounded w-36"></div>
+              </div>
+              <div className="flex items-center gap-3 ml-6">
+                <div className="w-2 h-2 rounded-full bg-[#efb87a]"></div>
+                <div className="h-3 bg-white/15 rounded w-44"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-4">
+    Quick Start
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    Get your first virtual cluster running in under 5 minutes
+  </p>
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+  <Steps>
+    <Step title="Install the vCluster CLI">
+      Install the vCluster CLI on your local machine using your preferred package manager.
 
-## Make it yours
+      <CodeGroup>
+      ```bash Homebrew
+      brew install loft-sh/tap/vcluster
+      ```
 
-Design a docs site that looks great and empowers your users.
+      ```bash Script
+      curl -L -o vcluster "https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-$(uname -s)-$(uname -m | sed 's/x86_64/amd64/')" && sudo install -c -m 0755 vcluster /usr/local/bin && rm -f vcluster
+      ```
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
-  </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
-  </Card>
+      ```bash Windows (PowerShell)
+      md -Force "$Env:APPDATA\vcluster"; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]'Tls,Tls11,Tls12';
+      Invoke-WebRequest -URI "https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-windows-amd64.exe" -o $Env:APPDATA\vcluster\vcluster.exe;
+      $env:Path += ";" + $Env:APPDATA + "\vcluster";
+      [Environment]::SetEnvironmentVariable("Path", $env:Path, [System.EnvironmentVariableTarget]::User);
+      ```
+      </CodeGroup>
+
+      Verify the installation:
+      ```bash
+      vcluster --version
+      ```
+    </Step>
+
+    <Step title="Create your virtual cluster">
+      Create your first virtual cluster with a single command. Make sure you have a Kubernetes cluster and `kubectl` configured.
+
+      ```bash
+      vcluster create my-vcluster --namespace team-x
+      ```
+
+      <Note>
+      This command creates a namespace `team-x`, deploys a virtual cluster named `my-vcluster`, and automatically connects your `kubectl` context to it.
+      </Note>
+    </Step>
+
+    <Step title="Use kubectl as normal">
+      You're now connected to your virtual cluster! Use `kubectl` just like you would with any Kubernetes cluster.
+
+      ```bash
+      # Create a namespace inside the virtual cluster
+      kubectl create namespace demo
+
+      # Deploy a workload
+      kubectl create deployment nginx --image=nginx -n demo
+
+      # View resources
+      kubectl get pods -n demo
+      ```
+
+      <Accordion title="Example output">
+      ```bash
+      NAME                     READY   STATUS    RESTARTS   AGE
+      nginx-7854ff8877-k2qvw   1/1     Running   0          10s
+      ```
+      </Accordion>
+    </Step>
+
+    <Step title="Manage your virtual clusters">
+      List all your virtual clusters and manage them with the CLI.
+
+      ```bash
+      # List all virtual clusters
+      vcluster list
+
+      # Disconnect from the virtual cluster
+      vcluster disconnect
+
+      # Reconnect anytime
+      vcluster connect my-vcluster --namespace team-x
+
+      # Delete when done
+      vcluster delete my-vcluster --namespace team-x
+      ```
+    </Step>
+  </Steps>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-4">
+    Explore by Topic
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    Deep dive into vCluster's capabilities and learn how to deploy production-grade virtual clusters
+  </p>
+
+  <CardGroup cols={3}>
     <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
-  </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
+      title="Architecture"
+      icon="sitemap"
+      href="/architecture/overview"
+    >
+      Understand how vCluster works and explore different deployment models from shared nodes to standalone mode.
+    </Card>
+    <Card
+      title="Deployment"
+      icon="rocket"
+      href="/deployment/helm-installation"
+    >
+      Learn how to deploy vCluster with Helm, configure high availability, and set up networking and storage.
+    </Card>
+    <Card
+      title="Operations"
+      icon="gears"
+      href="/operations/managing-vclusters"
+    >
+      Master day-to-day operations including pause/resume, snapshots, backups, upgrades, and monitoring.
+    </Card>
+    <Card
+      title="Resource Syncing"
+      icon="arrows-rotate"
+      href="/syncing/overview"
+    >
+      Configure bidirectional resource syncing between virtual and host clusters for seamless integration.
+    </Card>
+    <Card
+      title="Security"
+      icon="shield"
+      href="/security/isolation"
+    >
+      Implement strong isolation, RBAC, certificate management, and network policies for secure multi-tenancy.
+    </Card>
+    <Card
+      title="CLI Reference"
+      icon="terminal"
+      href="/cli/overview"
+    >
+      Explore the complete command reference for the vCluster CLI with examples and detailed options.
+    </Card>
+  </CardGroup>
+</div>
 
-## Create beautiful pages
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-4">
+    Popular Use Cases
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    See how teams use vCluster to solve real infrastructure challenges
+  </p>
 
-Everything you need to create world-class documentation.
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <a 
+      href="/use-cases/multi-tenancy" 
+      className="group block rounded-2xl border border-gray-200 dark:border-[#27272a] hover:border-[#f96609] dark:hover:border-[#f96609] overflow-hidden transition-colors no-underline bg-white dark:bg-[#1a1d27]"
+    >
+      <div className="h-48 bg-gradient-to-br from-[#040c24] to-[#0a1432] flex items-center justify-center overflow-hidden relative">
+        <div className="absolute inset-0 opacity-10">
+          <svg className="w-full h-full" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="50" cy="50" r="20" fill="#f96609"/>
+            <circle cx="150" cy="50" r="20" fill="#efb87a"/>
+            <circle cx="100" cy="120" r="20" fill="#f96609"/>
+            <circle cx="50" cy="150" r="20" fill="#efb87a"/>
+            <circle cx="150" cy="150" r="20" fill="#f96609"/>
+          </svg>
+        </div>
+        <svg className="w-24 h-24 text-[#f96609] relative z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+        </svg>
+      </div>
+      <div className="p-6">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-2">Multi-Tenancy</h3>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+          Provide isolated Kubernetes environments for teams with full admin access and strong tenant boundaries.
+        </p>
+        <span className="text-sm text-[#f96609] group-hover:text-[#e05508] dark:text-[#f96609] font-medium inline-flex items-center">
+          Learn more
+          <svg className="ml-1 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </span>
+      </div>
+    </a>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+    <a 
+      href="/use-cases/gpu-platforms" 
+      className="group block rounded-2xl border border-gray-200 dark:border-[#27272a] hover:border-[#f96609] dark:hover:border-[#f96609] overflow-hidden transition-colors no-underline bg-white dark:bg-[#1a1d27]"
+    >
+      <div className="h-48 bg-gradient-to-br from-[#0a1432] to-[#040c24] flex items-center justify-center overflow-hidden relative">
+        <div className="absolute inset-0 opacity-10">
+          <svg className="w-full h-full" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+            <rect x="20" y="20" width="60" height="60" rx="8" fill="#efb87a"/>
+            <rect x="120" y="20" width="60" height="60" rx="8" fill="#f96609"/>
+            <rect x="20" y="120" width="60" height="60" rx="8" fill="#f96609"/>
+            <rect x="120" y="120" width="60" height="60" rx="8" fill="#efb87a"/>
+          </svg>
+        </div>
+        <svg className="w-24 h-24 text-[#efb87a] relative z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+        </svg>
+      </div>
+      <div className="p-6">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-2">GPU & AI Platforms</h3>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+          Maximize GPU utilization with isolated workspaces for AI/ML teams while maintaining security and resource efficiency.
+        </p>
+        <span className="text-sm text-[#f96609] group-hover:text-[#e05508] dark:text-[#f96609] font-medium inline-flex items-center">
+          Learn more
+          <svg className="ml-1 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </span>
+      </div>
+    </a>
 
-## Need inspiration?
+    <a 
+      href="/use-cases/development-testing" 
+      className="group block rounded-2xl border border-gray-200 dark:border-[#27272a] hover:border-[#f96609] dark:hover:border-[#f96609] overflow-hidden transition-colors no-underline bg-white dark:bg-[#1a1d27]"
+    >
+      <div className="h-48 bg-gradient-to-br from-[#040c24] to-[#0a1432] flex items-center justify-center overflow-hidden relative">
+        <div className="absolute inset-0 opacity-10">
+          <svg className="w-full h-full" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+            <path d="M40 100 L100 40 L160 100 L100 160 Z" fill="#f96609"/>
+            <path d="M60 100 L100 60 L140 100 L100 140 Z" fill="#efb87a"/>
+          </svg>
+        </div>
+        <svg className="w-24 h-24 text-[#f96609] relative z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+        </svg>
+      </div>
+      <div className="p-6">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-2">Development & Testing</h3>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+          Spin up ephemeral test environments and preview deployments without the overhead of full clusters.
+        </p>
+        <span className="text-sm text-[#f96609] group-hover:text-[#e05508] dark:text-[#f96609] font-medium inline-flex items-center">
+          Learn more
+          <svg className="ml-1 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </span>
+      </div>
+    </a>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+    <a 
+      href="/use-cases/cost-optimization" 
+      className="group block rounded-2xl border border-gray-200 dark:border-[#27272a] hover:border-[#f96609] dark:hover:border-[#f96609] overflow-hidden transition-colors no-underline bg-white dark:bg-[#1a1d27]"
+    >
+      <div className="h-48 bg-gradient-to-br from-[#0a1432] to-[#040c24] flex items-center justify-center overflow-hidden relative">
+        <div className="absolute inset-0 opacity-10">
+          <svg className="w-full h-full" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+            <polyline points="20,180 60,120 100,140 140,60 180,80" fill="none" stroke="#f96609" strokeWidth="8"/>
+            <circle cx="60" cy="120" r="10" fill="#efb87a"/>
+            <circle cx="100" cy="140" r="10" fill="#f96609"/>
+            <circle cx="140" cy="60" r="10" fill="#efb87a"/>
+          </svg>
+        </div>
+        <svg className="w-24 h-24 text-[#efb87a] relative z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </div>
+      <div className="p-6">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-2">Cost Optimization</h3>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+          Consolidate workloads and reduce infrastructure costs with sleep mode for inactive clusters and efficient resource sharing.
+        </p>
+        <span className="text-sm text-[#f96609] group-hover:text-[#e05508] dark:text-[#f96609] font-medium inline-flex items-center">
+          Learn more
+          <svg className="ml-1 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </span>
+      </div>
+    </a>
+  </div>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-4">
+    Resources & Community
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    Get help, connect with the community, and stay up to date
+  </p>
+
+  <CardGroup cols={3}>
+    <Card
+      title="Join Slack"
+      icon="slack"
+      href="https://slack.loft.sh/"
+    >
+      Connect with 5,000+ vCluster users and get help from the community and team.
+    </Card>
+    <Card
+      title="GitHub"
+      icon="github"
+      href="https://github.com/loft-sh/vcluster"
+    >
+      Star the repo, report issues, and contribute to the open source project.
+    </Card>
+    <Card
+      title="Case Studies"
+      icon="briefcase"
+      href="https://www.vcluster.com/case-studies"
+    >
+      Learn how companies like Adobe, CoreWeave, and Atlan use vCluster in production.
+    </Card>
+  </CardGroup>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="rounded-2xl bg-gradient-to-br from-[#040c24] to-[#0a1432] dark:from-[#040c24] dark:to-[#0a1432] p-8 sm:p-12 text-center border border-white/10">
+    <h2 className="text-2xl sm:text-3xl font-bold text-white mb-4">
+      Ready to Get Started?
+    </h2>
+    <p className="text-lg text-gray-300 dark:text-gray-300 max-w-2xl mx-auto mb-8">
+      Deploy your first virtual cluster in minutes and experience the power of flexible Kubernetes tenancy.
+    </p>
+    <div className="flex flex-wrap gap-4 justify-center">
+      <a 
+        href="/quickstart" 
+        className="inline-flex items-center px-6 py-3 rounded-lg bg-[#f96609] hover:bg-[#e05508] text-white font-semibold transition-colors no-underline"
+      >
+        Start Quickstart
+        <svg className="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+        </svg>
+      </a>
+      <a 
+        href="/installation" 
+        className="inline-flex items-center px-6 py-3 rounded-lg border border-white/30 bg-white/10 hover:bg-white/20 text-white font-semibold transition-colors no-underline"
+      >
+        View Installation Options
+      </a>
+    </div>
+  </div>
+</div>

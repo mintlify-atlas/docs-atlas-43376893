@@ -1,0 +1,315 @@
+---
+title: "vcluster delete"
+description: "Delete a virtual cluster"
+---
+
+## Synopsis
+
+Deletes an existing virtual cluster.
+
+```bash
+vcluster delete VCLUSTER_NAME [flags]
+```
+
+## Description
+
+The `delete` command removes a virtual cluster and optionally its namespace. This operation cannot be undone unless you have a snapshot backup.
+
+<Warning>
+Deleting a vCluster removes all resources running inside it. Make sure to backup any important data before deletion.
+</Warning>
+
+## Examples
+
+### Basic Deletion
+
+```bash
+# Delete a vCluster
+vcluster delete my-vcluster --namespace team-x
+
+# Delete and remove the namespace
+vcluster delete my-vcluster -n team-x --delete-namespace
+```
+
+### Force Deletion
+
+```bash
+# Skip confirmation prompt
+vcluster delete my-vcluster -n team-x --force
+
+# Wait for complete deletion
+vcluster delete my-vcluster -n team-x --wait
+```
+
+### Create Snapshot Before Deletion
+
+```bash
+# Create backup snapshot first
+vcluster snapshot create my-vcluster -n team-x
+
+# Then delete
+vcluster delete my-vcluster -n team-x
+```
+
+## Flags
+
+<ParamField path="--namespace" type="string" required>
+  The Kubernetes namespace where the vCluster is running.
+</ParamField>
+
+<ParamField path="--driver" type="string" default="helm">
+  The driver to use. Options: `helm`, `platform`, `docker`.
+</ParamField>
+
+<ParamField path="--delete-namespace" type="boolean" default="false">
+  If true, delete the namespace after deleting the vCluster.
+</ParamField>
+
+<ParamField path="--force" type="boolean" default="false">
+  Skip confirmation prompt.
+</ParamField>
+
+<ParamField path="--wait" type="boolean" default="true">
+  Wait for the vCluster to be completely deleted.
+</ParamField>
+
+<ParamField path="--ignore-not-found" type="boolean">
+  Don't return an error if the vCluster doesn't exist.
+</ParamField>
+
+<ParamField path="--timeout" type="duration" default="5m">
+  Maximum time to wait for deletion.
+</ParamField>
+
+## What Gets Deleted
+
+When you delete a vCluster, the following resources are removed:
+
+### By Default
+- vCluster StatefulSet
+- vCluster Service
+- vCluster ConfigMaps and Secrets
+- Control plane pods
+- etcd data (if using deployed etcd)
+- All synced resources in the host cluster
+
+### With --delete-namespace
+- All of the above
+- The entire namespace
+- Any other resources in the namespace
+- Persistent volumes (depending on storage class reclaim policy)
+
+<Warning>
+Resources inside the virtual cluster are not backed up automatically. Create a snapshot before deletion if you need to restore later.
+</Warning>
+
+## Complete Examples
+
+### Safe Deletion Workflow
+
+```bash safe-delete.sh
+#!/bin/bash
+VCLUSTER="my-vcluster"
+NAMESPACE="team-x"
+
+# 1. Create snapshot
+echo "Creating snapshot..."
+vcluster snapshot create $VCLUSTER -n $NAMESPACE
+
+# 2. Export important data
+echo "Exporting resources..."
+vcluster connect $VCLUSTER -n $NAMESPACE
+kubectl get all --all-namespaces -o yaml > backup.yaml
+vcluster disconnect
+
+# 3. Delete
+echo "Deleting vCluster..."
+vcluster delete $VCLUSTER -n $NAMESPACE --wait
+
+echo "Deletion complete. Snapshot and backup saved."
+```
+
+### Clean Up Multiple vClusters
+
+```bash cleanup.sh
+#!/bin/bash
+# Delete all paused vClusters
+vcluster list --output json | \
+  jq -r '.[] | select(.Status=="Paused") | [.Name, .Namespace] | @tsv' | \
+  while IFS=$'\t' read -r name namespace; do
+    echo "Deleting $name in $namespace"
+    vcluster delete $name -n $namespace --force
+  done
+```
+
+### CI/CD Ephemeral Cleanup
+
+```bash ci-cleanup.sh
+#!/bin/bash
+# Clean up CI test clusters
+CLUSTER_NAME="test-${CI_JOB_ID}"
+NAMESPACE="ci"
+
+# Delete without waiting (CI will clean up namespace)
+vcluster delete $CLUSTER_NAME -n $NAMESPACE \
+  --force \
+  --ignore-not-found \
+  --delete-namespace
+```
+
+## Deletion Process
+
+The deletion happens in these stages:
+
+<Steps>
+  <Step title="Confirmation">
+    If `--force` is not set, you'll be prompted to confirm:
+    
+    ```
+    Are you sure you want to delete vCluster my-vcluster in namespace team-x? [y/N]:
+    ```
+  </Step>
+
+  <Step title="Resource Cleanup">
+    vCluster removes:
+    - StatefulSet and pods
+    - Services and endpoints
+    - ConfigMaps and secrets
+    - Synced resources
+  </Step>
+
+  <Step title="Persistent Data">
+    Persistent volumes are handled based on the storage class reclaim policy:
+    - **Retain** - PVs remain and must be manually deleted
+    - **Delete** - PVs are automatically deleted
+  </Step>
+
+  <Step title="Namespace Deletion (Optional)">
+    If `--delete-namespace` is set, the namespace is deleted after all vCluster resources are removed.
+  </Step>
+</Steps>
+
+## Output
+
+Successful deletion:
+
+```
+info   Deleting vCluster my-vcluster in namespace team-x
+info   Waiting for vCluster to be deleted...
+info   Successfully deleted vCluster my-vcluster
+```
+
+With namespace deletion:
+
+```
+info   Deleting vCluster my-vcluster in namespace team-x
+info   Waiting for vCluster to be deleted...
+info   Successfully deleted vCluster my-vcluster
+info   Deleting namespace team-x
+info   Successfully deleted namespace team-x
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Deletion hangs or times out">
+    If deletion hangs:
+
+    ```bash
+    # Check what's preventing deletion
+    kubectl get all -n team-x
+    kubectl get pvc -n team-x
+
+    # Check finalizers
+    kubectl get vcluster -n team-x -o yaml | grep finalizers
+
+    # Force delete stuck pods
+    kubectl delete pod my-vcluster-0 -n team-x --force --grace-period=0
+    ```
+  </Accordion>
+
+  <Accordion title="Namespace won't delete">
+    If the namespace is stuck in Terminating:
+
+    ```bash
+    # Check what resources are left
+    kubectl api-resources --verbs=list --namespaced -o name | \
+      xargs -n 1 kubectl get --show-kind --ignore-not-found -n team-x
+
+    # Remove finalizers if needed
+    kubectl patch namespace team-x -p '{"metadata":{"finalizers":null}}' --type=merge
+    ```
+  </Accordion>
+
+  <Accordion title="PVCs not deleting">
+    Persistent Volume Claims might remain:
+
+    ```bash
+    # List PVCs
+    kubectl get pvc -n team-x
+
+    # Delete manually
+    kubectl delete pvc --all -n team-x
+
+    # Check PVs
+    kubectl get pv | grep team-x
+    ```
+  </Accordion>
+
+  <Accordion title="Resource not found errors">
+    If the vCluster was already partially deleted:
+
+    ```bash
+    # Ignore not found errors
+    vcluster delete my-vcluster -n team-x --ignore-not-found
+
+    # Or manually clean up
+    kubectl delete namespace team-x
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Recovery
+
+If you deleted a vCluster by mistake:
+
+### From Snapshot
+
+If you created a snapshot:
+
+```bash
+# List available snapshots
+vcluster snapshot list
+
+# Restore from snapshot
+vcluster restore my-vcluster -n team-x --snapshot my-snapshot
+```
+
+### From Backup
+
+If you exported resources:
+
+```bash
+# Recreate vCluster
+vcluster create my-vcluster -n team-x
+
+# Connect
+vcluster connect my-vcluster -n team-x
+
+# Restore resources
+kubectl apply -f backup.yaml
+```
+
+## Best Practices
+
+<Check>**Always create snapshots** before deleting production vClusters</Check>
+<Check>**Use --wait** to ensure complete deletion</Check>
+<Check>**Check dependencies** before deleting namespaces</Check>
+<Check>**Document deletion** in change logs</Check>
+<Check>**Verify deletion** is complete after running the command</Check>
+
+## See Also
+
+- [vcluster snapshot](/cli/snapshot) - Create snapshots before deletion
+- [vcluster restore](/cli/restore) - Restore from snapshots
+- [vcluster list](/cli/list) - List existing vClusters

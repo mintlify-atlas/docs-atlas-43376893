@@ -1,0 +1,252 @@
+---
+title: Multi-Tenancy
+description: Build secure, isolated Kubernetes environments for multiple teams or customers
+---
+
+## The Challenge
+
+Sharing a Kubernetes cluster across multiple teams or customers is complex:
+
+- **Namespace isolation isn't enough** - Teams need admin-level access without risking the host cluster
+- **Security boundaries are weak** - CRDs, cluster roles, and webhooks are shared across all tenants
+- **Resource conflicts** - Teams compete for the same API resources and cluster-wide configurations
+- **Compliance requirements** - Regulated industries need stronger isolation guarantees than namespaces provide
+
+## How vCluster Solves It
+
+vCluster provides **true multi-tenancy** by giving each tenant their own virtual Kubernetes control plane. Each virtual cluster has:
+
+- **Isolated API server** - Complete Kubernetes API isolation with independent RBAC
+- **Admin access per tenant** - Teams get cluster-admin inside their vCluster while having minimal permissions on the host
+- **Separate CRD namespaces** - No conflicts between tenant CRDs or cluster-wide resources
+- **Strong security boundaries** - Workloads run in dedicated namespaces with enforced policies
+
+## Real-World Examples
+
+### Internal Platform Teams
+
+**Atlan** reduced their cluster count from 100 to 1 by using vCluster for multi-tenant isolation. Each data engineering team gets their own virtual cluster with full autonomy.
+
+### Software Vendors
+
+Deliver Kubernetes-native software where each customer gets their own isolated virtual cluster. Perfect for SaaS platforms that need to provision per-customer environments quickly.
+
+### Enterprise Kubernetes Platforms
+
+**Deloitte** built their enterprise Kubernetes platform using vCluster, providing isolated environments for different business units while maintaining centralized governance.
+
+## Recommended Configuration
+
+### Basic Multi-Tenancy (Shared Nodes)
+
+Maximize density and minimize cost. Tenants share the host cluster's nodes:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: false  # Uses pseudo nodes for maximum density
+
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.cpu: 10
+      requests.memory: 20Gi
+      limits.cpu: 20
+      limits.memory: 40Gi
+      count/pods: 20
+      count/services: 20
+  limitRange:
+    enabled: true
+    default:
+      memory: 512Mi
+      cpu: "1"
+    defaultRequest:
+      memory: 128Mi
+      cpu: 100m
+```
+
+### Production Multi-Tenancy (Dedicated Nodes)
+
+Each tenant gets dedicated compute resources using node labels:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          tenant: team-alpha  # Dedicated node pool per tenant
+  toHost:
+    pods:
+      enforceTolerations:
+        - key: tenant
+          operator: Equal
+          value: team-alpha
+          effect: NoSchedule
+
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      publicEgress:
+        enabled: true
+        cidr: 0.0.0.0/0
+        except:
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+```
+
+### High-Security Multi-Tenancy (Private Nodes)
+
+Complete CNI/CSI isolation for compliance and regulated environments:
+
+```yaml
+privateNodes:
+  enabled: true
+
+controlPlane:
+  service:
+    spec:
+      type: NodePort
+
+policies:
+  networkPolicy:
+    enabled: true
+    controlPlane:
+      ingress:
+        - from:
+            - podSelector: {}
+      egress:
+        - to:
+            - podSelector: {}
+```
+
+## Best Practices
+
+### 1. Enforce Resource Quotas
+
+Prevent noisy neighbors by setting hard limits per tenant:
+
+```yaml
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.cpu: 10
+      requests.memory: 20Gi
+      requests.storage: "100Gi"
+      services.loadbalancers: 1
+```
+
+### 2. Implement Network Policies
+
+Isolate tenant traffic and control egress:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      ingress: []
+      egress:
+        - to:
+            - namespaceSelector:
+                matchLabels:
+                  name: kube-system
+          ports:
+            - protocol: UDP
+              port: 53
+```
+
+### 3. Use Separate Node Pools
+
+For production tenants, dedicate nodes by labeling host cluster nodes:
+
+```bash
+kubectl label nodes node-1 node-2 node-3 tenant=customer-a
+```
+
+Then configure the vCluster:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          tenant: customer-a
+```
+
+### 4. Integrate with External Secrets
+
+Securely manage tenant secrets:
+
+```yaml
+integrations:
+  externalSecrets:
+    enabled: true
+    sync:
+      toHost:
+        externalSecrets:
+          selector:
+            matchLabels:
+              tenant: customer-a
+```
+
+### 5. Enable High Availability
+
+For production tenants, run multiple control plane replicas:
+
+```yaml
+controlPlane:
+  backingStore:
+    etcd:
+      deploy:
+        enabled: true
+        statefulSet:
+          highAvailability:
+            replicas: 3
+  statefulSet:
+    highAvailability:
+      replicas: 3
+```
+
+### 6. Monitor Per-Tenant Resources
+
+Enable metrics collection for billing and chargeback:
+
+```yaml
+controlPlane:
+  serviceMonitor:
+    enabled: true
+    labels:
+      tenant: customer-a
+
+integrations:
+  metricsServer:
+    enabled: true
+    pods: true
+    nodes: true
+```
+
+## Architecture Progression
+
+Start with shared nodes for development and scale to dedicated or private nodes for production:
+
+| Isolation Level | Use Case | Cost | Security |
+|----------------|----------|------|----------|
+| **Shared Nodes** | Dev/test environments, internal teams | Lowest | Basic |
+| **Dedicated Nodes** | Production tenants, regulated workloads | Medium | Strong |
+| **Private Nodes** | Compliance, financial services, healthcare | Highest | Maximum |
+
+## Related Resources
+
+- [Architecture Overview](/vcluster/introduction/architecture)
+- [Security & Policies](/vcluster/security/overview)
+- [Resource Quotas](/vcluster/policies/resource-quotas)
+- [Network Policies](/vcluster/policies/network-policies)

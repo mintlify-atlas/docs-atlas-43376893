@@ -1,0 +1,747 @@
+---
+title: "Troubleshooting"
+description: "Diagnose and resolve common vCluster issues"
+---
+
+## Overview
+
+This guide provides systematic troubleshooting approaches for common vCluster issues. Use the diagnostic commands and solutions to quickly identify and resolve problems.
+
+## General Troubleshooting Approach
+
+<Steps>
+  <Step title="Identify the Issue">
+    Clearly define what's not working:
+    - What were you trying to do?
+    - What happened instead?
+    - When did it start?
+    - Has it ever worked?
+  </Step>
+  
+  <Step title="Gather Information">
+    Collect diagnostic data:
+    ```bash
+    vcluster debug collect my-vcluster --namespace production
+    ```
+  </Step>
+  
+  <Step title="Check Basics">
+    Verify fundamental components:
+    ```bash
+    vcluster list
+    kubectl get pods -n production -l release=my-vcluster
+    kubectl logs -n production -l app=vcluster,release=my-vcluster --tail=100
+    ```
+  </Step>
+  
+  <Step title="Review Changes">
+    What changed recently?
+    - Configuration updates
+    - Version upgrades
+    - Infrastructure changes
+    - New deployments
+  </Step>
+  
+  <Step title="Isolate the Problem">
+    Test components individually:
+    - Host cluster connectivity
+    - Virtual cluster API server
+    - Resource syncing
+    - Network policies
+  </Step>
+  
+  <Step title="Apply Solution">
+    Try fixes from most to least invasive:
+    1. Configuration changes
+    2. Pod restarts
+    3. Resource recreation
+    4. Full restoration from backup
+  </Step>
+</Steps>
+
+## Common Issues and Solutions
+
+### Connection and Access Issues
+
+<AccordionGroup>
+  <Accordion title="Cannot Connect to vCluster">
+    **Symptoms:**
+    - `vcluster connect` hangs or times out
+    - Connection refused errors
+    - Authentication failures
+    
+    **Diagnosis:**
+    ```bash
+    # Check if vCluster pods are running
+    kubectl get pods -n production -l release=my-vcluster
+    
+    # Check service endpoints
+    kubectl get svc -n production -l release=my-vcluster
+    kubectl get endpoints -n production
+    
+    # Check port-forward manually
+    kubectl port-forward -n production svc/my-vcluster 8443:443
+    ```
+    
+    **Solutions:**
+    
+    1. **Restart vCluster pods:**
+       ```bash
+       kubectl rollout restart statefulset -n production my-vcluster
+       ```
+    
+    2. **Check service account permissions:**
+       ```bash
+       kubectl get sa -n production
+       kubectl describe sa vc-my-vcluster -n production
+       ```
+    
+    3. **Verify network policies:**
+       ```bash
+       kubectl get networkpolicy -n production
+       kubectl describe networkpolicy -n production
+       ```
+    
+    4. **Check for resource constraints:**
+       ```bash
+       kubectl describe pod -n production -l release=my-vcluster
+       kubectl top pods -n production
+       ```
+    
+    5. **Try reconnecting with verbose output:**
+       ```bash
+       vcluster connect my-vcluster --namespace production --debug
+       ```
+  </Accordion>
+  
+  <Accordion title="kubectl Commands Timing Out">
+    **Symptoms:**
+    - Commands hang indefinitely
+    - Timeouts after several seconds
+    - Intermittent connectivity
+    
+    **Diagnosis:**
+    ```bash
+    # Test API server health
+    kubectl get --raw /healthz
+    kubectl get --raw /readyz
+    
+    # Check API server logs
+    kubectl logs -n production -l app=vcluster,release=my-vcluster | grep -i error
+    
+    # Test specific operations
+    time kubectl get nodes
+    time kubectl get pods
+    ```
+    
+    **Solutions:**
+    
+    1. **Increase timeout:**
+       ```bash
+       kubectl get pods --request-timeout=60s
+       ```
+    
+    2. **Check etcd performance:**
+       ```bash
+       # Access vCluster pod
+       kubectl exec -it -n production my-vcluster-0 -- sh
+       
+       # Inside pod, check etcd
+       ETCDCTL_API=3 etcdctl --endpoints=https://localhost:2379 \
+         --cert=/pki/etcd/tls.crt \
+         --key=/pki/etcd/tls.key \
+         --cacert=/pki/etcd/ca.crt \
+         endpoint health
+       ```
+    
+    3. **Reduce cluster load:**
+       - Scale down non-critical workloads
+       - Check for resource-intensive operations
+       - Review API server logs for high-frequency requests
+    
+    4. **Increase API server resources:**
+       ```yaml
+       # vcluster.yaml
+       controlPlane:
+         statefulSet:
+           resources:
+             requests:
+               cpu: 200m
+               memory: 512Mi
+             limits:
+               cpu: 1000m
+               memory: 2Gi
+       ```
+  </Accordion>
+  
+  <Accordion title="Authentication/Authorization Errors">
+    **Symptoms:**
+    - "Unauthorized" or "Forbidden" errors
+    - Permission denied messages
+    - RBAC violations
+    
+    **Diagnosis:**
+    ```bash
+    # Check current user
+    kubectl auth whoami
+    
+    # Test permissions
+    kubectl auth can-i get pods
+    kubectl auth can-i create deployments
+    kubectl auth can-i '*' '*' --all-namespaces
+    
+    # View role bindings
+    kubectl get rolebindings,clusterrolebindings -o wide
+    ```
+    
+    **Solutions:**
+    
+    1. **Verify kubeconfig context:**
+       ```bash
+       kubectl config current-context
+       kubectl config view
+       ```
+    
+    2. **Reconnect to vCluster:**
+       ```bash
+       vcluster disconnect
+       vcluster connect my-vcluster --namespace production
+       ```
+    
+    3. **Check certificate validity:**
+       ```bash
+       # View certificate details
+       kubectl config view --raw -o jsonpath='{.users[0].user.client-certificate-data}' | \
+         base64 -d | openssl x509 -text -noout
+       ```
+    
+    4. **Grant necessary permissions:**
+       ```bash
+       # Create role binding
+       kubectl create rolebinding dev-admin \
+         --clusterrole=admin \
+         --user=user@example.com \
+         --namespace=default
+       ```
+  </Accordion>
+</AccordionGroup>
+
+### Resource Syncing Issues
+
+<AccordionGroup>
+  <Accordion title="Resources Not Syncing to Host">
+    **Symptoms:**
+    - Resources created in vCluster don't appear in host namespace
+    - Pods stay pending indefinitely
+    - Services not accessible from host
+    
+    **Diagnosis:**
+    ```bash
+    # Check syncer logs
+    kubectl logs -n production -l app=vcluster,release=my-vcluster -c syncer
+    
+    # Compare resources
+    vcluster connect my-vcluster --namespace production
+    kubectl get pods -o wide
+    vcluster disconnect
+    kubectl get pods -n production
+    
+    # Check sync configuration
+    vcluster describe my-vcluster --config-only
+    ```
+    
+    **Solutions:**
+    
+    1. **Verify sync configuration:**
+       ```yaml
+       # vcluster.yaml
+       sync:
+         toHost:
+           pods:
+             enabled: true
+           services:
+             enabled: true
+           persistentVolumeClaims:
+             enabled: true
+       ```
+    
+    2. **Restart syncer:**
+       ```bash
+       kubectl delete pod -n production -l app=vcluster,release=my-vcluster
+       ```
+    
+    3. **Check service account permissions:**
+       ```bash
+       kubectl auth can-i create pods \
+         --as=system:serviceaccount:production:vc-my-vcluster \
+         -n production
+       ```
+    
+    4. **Review resource quotas:**
+       ```bash
+       kubectl get resourcequota -n production
+       kubectl describe resourcequota -n production
+       ```
+    
+    5. **Check for naming conflicts:**
+       ```bash
+       # Synced resources have specific naming patterns
+       kubectl get pods -n production -o jsonpath='{.items[*].metadata.name}'
+       ```
+  </Accordion>
+  
+  <Accordion title="Pods Stuck in Pending">
+    **Symptoms:**
+    - Pods created but never start
+    - Status remains "Pending"
+    - Containers not running
+    
+    **Diagnosis:**
+    ```bash
+    # Check pod status and events
+    kubectl describe pod <pod-name>
+    kubectl get events --sort-by='.lastTimestamp'
+    
+    # Check node resources
+    kubectl top nodes
+    kubectl describe nodes
+    
+    # Check PVC status
+    kubectl get pvc
+    kubectl describe pvc <pvc-name>
+    ```
+    
+    **Solutions:**
+    
+    1. **Insufficient resources:**
+       ```bash
+       # Scale down other workloads or add nodes
+       kubectl scale deployment other-app --replicas=0
+       ```
+    
+    2. **PVC not bound:**
+       ```bash
+       # Check storage class
+       kubectl get storageclass
+       
+       # Create PVC manually if needed
+       kubectl apply -f pvc.yaml
+       ```
+    
+    3. **Image pull failures:**
+       ```bash
+       # Check image pull secrets
+       kubectl get secrets
+       kubectl describe pod <pod-name> | grep -A 10 "Events"
+       
+       # Test image accessibility
+       kubectl run test --image=<image> --dry-run=client -o yaml
+       ```
+    
+    4. **Node selectors/taints:**
+       ```bash
+       # Check node selectors and taints
+       kubectl get nodes -o custom-columns=NAME:.metadata.name,TAINTS:.spec.taints
+       
+       # Remove taint if needed
+       kubectl taint nodes <node-name> key:NoSchedule-
+       ```
+  </Accordion>
+  
+  <Accordion title="Services Not Accessible">
+    **Symptoms:**
+    - Services created but not reachable
+    - Connection refused or timeout
+    - DNS resolution failures
+    
+    **Diagnosis:**
+    ```bash
+    # Check service and endpoints
+    kubectl get svc,endpoints
+    kubectl describe svc <service-name>
+    
+    # Test DNS resolution
+    kubectl run test-dns --image=busybox --rm -it -- nslookup <service-name>
+    
+    # Check network policies
+    kubectl get networkpolicy
+    kubectl describe networkpolicy
+    ```
+    
+    **Solutions:**
+    
+    1. **Verify service sync:**
+       ```yaml
+       # vcluster.yaml
+       sync:
+         toHost:
+           services:
+             enabled: true
+       ```
+    
+    2. **Check endpoints:**
+       ```bash
+       kubectl get endpoints <service-name>
+       # Should show pod IPs
+       ```
+    
+    3. **Test connectivity:**
+       ```bash
+       # From within cluster
+       kubectl run test-curl --image=curlimages/curl --rm -it -- \
+         curl http://<service-name>:<port>
+       ```
+    
+    4. **Review network policies:**
+       ```bash
+       # Temporarily remove network policies to test
+       kubectl delete networkpolicy --all
+       # Test connectivity, then restore policies
+       ```
+  </Accordion>
+</AccordionGroup>
+
+### Performance Issues
+
+<AccordionGroup>
+  <Accordion title="High CPU/Memory Usage">
+    **Symptoms:**
+    - Slow response times
+    - OOMKilled pods
+    - Throttling warnings
+    
+    **Diagnosis:**
+    ```bash
+    # Check current usage
+    kubectl top pods -n production -l release=my-vcluster
+    kubectl top nodes
+    
+    # Get resource limits
+    kubectl get pod -n production -l release=my-vcluster \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[*].resources}{"\n"}{end}'
+    
+    # Check for memory leaks
+    kubectl exec -it -n production my-vcluster-0 -- top -b -n 1
+    ```
+    
+    **Solutions:**
+    
+    1. **Increase resource limits:**
+       ```yaml
+       # vcluster.yaml
+       controlPlane:
+         statefulSet:
+           resources:
+             limits:
+               cpu: 2000m
+               memory: 4Gi
+             requests:
+               cpu: 500m
+               memory: 1Gi
+       ```
+    
+    2. **Enable resource limiting in virtual cluster:**
+       ```yaml
+       policies:
+         resourceQuota:
+           enabled: true
+           quota:
+             requests.cpu: "10"
+             requests.memory: 20Gi
+             limits.cpu: "20"
+             limits.memory: 40Gi
+       ```
+    
+    3. **Optimize workload placement:**
+       ```bash
+       # Use node affinity to spread load
+       kubectl patch deployment app \
+         -p '{"spec":{"template":{"spec":{"affinity":{"podAntiAffinity":{"preferredDuringSchedulingIgnoredDuringExecution":[{"weight":100,"podAffinityTerm":{"labelSelector":{"matchExpressions":[{"key":"app","operator":"In","values":["app"]}]},"topologyKey":"kubernetes.io/hostname"}}]}}}}}}'
+       ```
+    
+    4. **Profile and optimize:**
+       ```bash
+       # Enable profiling
+       kubectl port-forward -n production my-vcluster-0 6060:6060
+       # Access http://localhost:6060/debug/pprof/
+       ```
+  </Accordion>
+  
+  <Accordion title="Slow API Response Times">
+    **Symptoms:**
+    - kubectl commands take long to complete
+    - API timeouts
+    - Unresponsive control plane
+    
+    **Diagnosis:**
+    ```bash
+    # Measure API latency
+    time kubectl get nodes
+    time kubectl get pods --all-namespaces
+    
+    # Check API server metrics
+    kubectl get --raw /metrics | grep apiserver_request_duration
+    
+    # Check etcd performance
+    kubectl logs -n production my-vcluster-0 | grep -i "etcd"
+    ```
+    
+    **Solutions:**
+    
+    1. **Increase API server resources** (see above)
+    
+    2. **Optimize etcd:**
+       ```yaml
+       # vcluster.yaml
+       controlPlane:
+         backingStore:
+           etcd:
+             embedded:
+               enabled: true
+               migrateFromDeployedEtcd: true
+           database:
+             # Or use external database
+             external:
+               enabled: true
+               endpoint: postgres://...
+       ```
+    
+    3. **Reduce API load:**
+       ```bash
+       # Find high-frequency API callers
+       kubectl logs -n production my-vcluster-0 | \
+         grep "requestInfo" | \
+         awk '{print $NF}' | sort | uniq -c | sort -rn | head -20
+       ```
+    
+    4. **Enable API priority and fairness:**
+       ```yaml
+       controlPlane:
+         statefulSet:
+           enableServiceLinks: false
+       ```
+  </Accordion>
+</AccordionGroup>
+
+### Stability Issues
+
+<AccordionGroup>
+  <Accordion title="Frequent Pod Restarts">
+    **Symptoms:**
+    - Pods restarting repeatedly
+    - CrashLoopBackOff status
+    - High restart count
+    
+    **Diagnosis:**
+    ```bash
+    # Check restart count
+    kubectl get pods -n production -l release=my-vcluster
+    
+    # View crash logs
+    kubectl logs -n production my-vcluster-0 --previous
+    
+    # Check for OOM kills
+    kubectl describe pod -n production my-vcluster-0 | grep -A 5 "Last State"
+    
+    # Review events
+    kubectl get events -n production --sort-by='.lastTimestamp' | grep my-vcluster
+    ```
+    
+    **Solutions:**
+    
+    1. **OOM kills - increase memory:**
+       ```yaml
+       controlPlane:
+         statefulSet:
+           resources:
+             limits:
+               memory: 4Gi
+       ```
+    
+    2. **Liveness probe too aggressive:**
+       ```yaml
+       controlPlane:
+         statefulSet:
+           probes:
+             livenessProbe:
+               initialDelaySeconds: 60
+               periodSeconds: 20
+               failureThreshold: 5
+       ```
+    
+    3. **Application errors - check logs:**
+       ```bash
+       kubectl logs -n production my-vcluster-0 --previous | tail -100
+       ```
+    
+    4. **Resource contention:**
+       ```bash
+       # Check node pressure
+       kubectl describe nodes | grep -A 5 "Conditions"
+       ```
+  </Accordion>
+  
+  <Accordion title="Data Loss or Corruption">
+    **Symptoms:**
+    - Resources disappearing
+    - Configuration resets
+    - State inconsistencies
+    
+    **Diagnosis:**
+    ```bash
+    # Check PVC status
+    kubectl get pvc -n production
+    kubectl describe pvc -n production
+    
+    # Verify backup storage
+    kubectl logs -n production my-vcluster-0 | grep -i "backup\|snapshot\|etcd"
+    
+    # Check for volume mount issues
+    kubectl describe pod -n production my-vcluster-0 | grep -A 10 "Volumes"
+    ```
+    
+    **Solutions:**
+    
+    1. **Restore from backup:**
+       ```bash
+       vcluster restore my-vcluster \
+         oci://ghcr.io/my-org/backups:latest \
+         --namespace production
+       ```
+    
+    2. **Fix PVC issues:**
+       ```bash
+       # Check storage class
+       kubectl get storageclass
+       kubectl describe storageclass
+       
+       # Recreate PVC if corrupted
+       kubectl delete pvc data-my-vcluster-0 -n production
+       kubectl rollout restart statefulset my-vcluster -n production
+       ```
+    
+    3. **Enable persistent storage:**
+       ```yaml
+       controlPlane:
+         backingStore:
+           etcd:
+             embedded:
+               enabled: true
+             persistence:
+               enabled: true
+               size: 10Gi
+               storageClass: fast-ssd
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Advanced Debugging
+
+### Enable Debug Logging
+
+```yaml
+# vcluster.yaml
+controlPlane:
+  statefulSet:
+    env:
+    - name: DEBUG
+      value: "true"
+    - name: LOG_LEVEL
+      value: "debug"
+```
+
+### Interactive Debugging Shell
+
+```bash
+# Shell into control plane pod
+vcluster debug shell my-vcluster --namespace production
+
+# Or use kubectl directly
+kubectl exec -it -n production my-vcluster-0 -- /bin/sh
+```
+
+### Network Debugging
+
+```bash
+# Deploy debug pod
+kubectl run debug --image=nicolaka/netshoot -it --rm -- /bin/bash
+
+# Inside debug pod:
+ping <service-name>
+nslookup <service-name>
+curl http://<service-name>:<port>
+traceroute <service-name>
+```
+
+### Collect Comprehensive Debug Info
+
+```bash
+# Generate debug bundle
+vcluster debug collect my-vcluster \
+  --namespace production \
+  --output-filename debug-$(date +%Y%m%d-%H%M%S).tar.gz
+
+# Extract and review
+tar -xzf debug-*.tar.gz
+cd debug/
+ls -R
+```
+
+## Getting Help
+
+If you're still experiencing issues:
+
+<CardGroup cols={2}>
+  <Card title="GitHub Issues" icon="github">
+    Search or create an issue: [github.com/loft-sh/vcluster/issues](https://github.com/loft-sh/vcluster/issues)
+  </Card>
+  
+  <Card title="Slack Community" icon="slack">
+    Join the community: [vcluster.com/slack](https://vcluster.com/slack)
+  </Card>
+  
+  <Card title="Documentation" icon="book">
+    Browse docs: [vcluster.com/docs](https://vcluster.com/docs)
+  </Card>
+  
+  <Card title="Support" icon="headset">
+    Enterprise support: Contact your account team
+  </Card>
+</CardGroup>
+
+### When Reporting Issues
+
+Include:
+
+1. **Environment details:**
+   - vCluster version
+   - Kubernetes version (host and virtual)
+   - Cloud provider/platform
+   - Installation method (Helm, Platform, etc.)
+
+2. **Reproduction steps:**
+   - What you did
+   - What you expected
+   - What actually happened
+
+3. **Debug information:**
+   - Output of `vcluster debug collect`
+   - Relevant logs
+   - Configuration files (sanitized)
+   - Error messages
+
+4. **Attempted solutions:**
+   - What you've tried
+   - Results of each attempt
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Monitoring" icon="chart-line" href="/operations/monitoring">
+    Set up monitoring to catch issues early
+  </Card>
+  
+  <Card title="Managing vClusters" icon="sliders" href="/operations/managing-vclusters">
+    Return to general management operations
+  </Card>
+</CardGroup>

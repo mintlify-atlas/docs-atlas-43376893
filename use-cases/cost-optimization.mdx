@@ -1,0 +1,470 @@
+---
+title: Cost Optimization
+description: Reduce Kubernetes infrastructure costs through cluster consolidation and efficient resource utilization
+---
+
+## The Challenge
+
+Kubernetes infrastructure is expensive:
+
+- **Too many clusters** - Each team runs their own cluster, multiplying control plane and node costs
+- **Low utilization** - Clusters sit idle overnight and on weekends, wasting resources
+- **Over-provisioning** - Teams request more resources than they need "just in case"
+- **Complex billing** - Hard to track and allocate costs per team or project
+- **Scaling costs** - Adding new teams means spinning up new expensive clusters
+
+## How vCluster Solves It
+
+vCluster enables **massive cost savings** through:
+
+- **Cluster consolidation** - Run 100+ virtual clusters on a single host cluster
+- **Sleep mode** - Automatically pause inactive clusters to save resources
+- **Shared infrastructure** - Teams share nodes while maintaining isolation
+- **Right-sized resources** - Use resource quotas and limits to prevent waste
+- **Efficient scaling** - Add new teams without adding new physical clusters
+
+## Real-World Examples
+
+### 70% Cost Reduction
+
+A **Fortune 500 Insurance Company** reduced their Kubernetes costs by **70%** using vCluster to consolidate their cluster sprawl.
+
+### 50% Operations Cost Reduction
+
+**Trade Connectors** cut their Kubernetes operations costs by **50%** by using vCluster for multi-tenant isolation instead of separate clusters.
+
+### 100:1 Cluster Consolidation
+
+**Atlan** went from **100 clusters to 1** using vCluster, dramatically reducing infrastructure and operational costs.
+
+## Cost-Saving Strategies
+
+### 1. Cluster Consolidation
+
+Replace multiple physical clusters with virtual clusters:
+
+**Before vCluster:**
+- 50 teams × 1 cluster each = 50 control planes + 50 node pools
+- Cost: ~$50,000/month (50 × $1,000)
+
+**After vCluster:**
+- 50 virtual clusters on 1 host cluster = 1 control plane + shared node pool
+- Cost: ~$15,000/month (70% reduction)
+
+```yaml
+# Lightweight configuration for maximum density
+controlPlane:
+  backingStore:
+    database:
+      embedded:
+        enabled: true
+  statefulSet:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+  coredns:
+    embedded: true
+
+sync:
+  fromHost:
+    nodes:
+      enabled: false  # Pseudo nodes for maximum density
+```
+
+### 2. Sleep Mode (Requires vCluster Platform)
+
+Automatically pause inactive clusters:
+
+```yaml
+# Configured via vCluster Platform UI or API
+sleep:
+  afterInactivity: 1h  # Sleep after 1 hour of no activity
+  deleteAfter: 168h    # Delete after 7 days of sleep
+```
+
+**Cost Impact:**
+- Development clusters typically idle 16+ hours/day
+- Sleep mode reduces costs by **60-70%** for dev environments
+- Wake up instantly when developers return
+
+### 3. Resource Quotas
+
+Prevent over-provisioning with hard limits:
+
+```yaml
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.cpu: 10
+      requests.memory: 20Gi
+      requests.storage: "100Gi"
+      limits.cpu: 20
+      limits.memory: 40Gi
+      count/pods: 20
+      count/services: 20
+      services.loadbalancers: 1
+```
+
+**Cost Impact:**
+- Prevents runaway resource consumption
+- Forces teams to right-size their workloads
+- Makes cost allocation transparent
+
+### 4. Limit Ranges
+
+Set sensible defaults to prevent waste:
+
+```yaml
+policies:
+  limitRange:
+    enabled: true
+    default:
+      cpu: "1"
+      memory: 512Mi
+      ephemeral-storage: 8Gi
+    defaultRequest:
+      cpu: 100m
+      memory: 128Mi
+      ephemeral-storage: 3Gi
+    max:
+      cpu: "16"
+      memory: 64Gi
+```
+
+**Cost Impact:**
+- Prevents developers from requesting unlimited resources
+- Sets reasonable defaults for unconfigured workloads
+- Reduces memory and CPU waste
+
+### 5. Shared Node Pools
+
+Maximize node utilization across teams:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: false  # Share host nodes efficiently
+```
+
+**Cost Impact:**
+- Instead of dedicated nodes per team (low utilization)
+- Share nodes across all virtual clusters (high utilization)
+- Can achieve 80%+ node utilization vs 20-30% with separate clusters
+
+### 6. Spot/Preemptible Instances
+
+Run non-production workloads on cheap compute:
+
+```yaml
+controlPlane:
+  statefulSet:
+    scheduling:
+      nodeSelector:
+        node-type: spot
+      tolerations:
+        - key: spot
+          operator: Exists
+          effect: NoSchedule
+```
+
+Then label spot instance nodes:
+
+```bash
+kubectl label nodes spot-node-1 spot-node-2 node-type=spot
+kubectl taint nodes spot-node-1 spot-node-2 spot=true:NoSchedule
+```
+
+**Cost Impact:**
+- 60-80% cheaper than on-demand instances
+- Suitable for dev, test, and CI/CD environments
+
+## Configuration Examples
+
+### Maximum Density Configuration
+
+Optimized for running 100+ virtual clusters:
+
+```yaml
+controlPlane:
+  backingStore:
+    database:
+      embedded:
+        enabled: true
+  statefulSet:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 512Mi
+    persistence:
+      volumeClaim:
+        size: 2Gi
+  coredns:
+    embedded: true
+    deployment:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+
+sync:
+  fromHost:
+    nodes:
+      enabled: false
+  toHost:
+    secrets:
+      all: false  # Only sync necessary secrets
+    configMaps:
+      all: false  # Only sync necessary configmaps
+
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.cpu: 4
+      requests.memory: 8Gi
+      limits.cpu: 8
+      limits.memory: 16Gi
+      count/pods: 50
+```
+
+### Cost-Optimized Production
+
+Balance cost and isolation for production workloads:
+
+```yaml
+controlPlane:
+  backingStore:
+    database:
+      embedded:
+        enabled: true
+  statefulSet:
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+    highAvailability:
+      replicas: 2  # Instead of 3 for non-critical workloads
+
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          workload: production
+          cost-tier: standard  # Not premium
+
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.cpu: 20
+      requests.memory: 40Gi
+      limits.cpu: 40
+      limits.memory: 80Gi
+```
+
+## Cost Monitoring & Chargeback
+
+### Label Virtual Clusters for Cost Tracking
+
+```bash
+vcluster create team-alpha \
+  --namespace production \
+  --labels team=alpha,cost-center=engineering,environment=prod
+```
+
+### Enable Metrics Collection
+
+```yaml
+controlPlane:
+  serviceMonitor:
+    enabled: true
+    labels:
+      team: alpha
+      cost-center: engineering
+
+integrations:
+  metricsServer:
+    enabled: true
+    pods: true
+    nodes: true
+```
+
+### Query Resource Usage
+
+Use Prometheus queries for cost allocation:
+
+```promql
+# CPU usage by vCluster
+sum(rate(container_cpu_usage_seconds_total{namespace="vcluster-team-alpha"}[5m])) by (namespace)
+
+# Memory usage by vCluster
+sum(container_memory_working_set_bytes{namespace="vcluster-team-alpha"}) by (namespace)
+
+# Pod count by vCluster
+count(kube_pod_info{namespace="vcluster-team-alpha"})
+```
+
+## Best Practices
+
+### 1. Start with Shared Nodes
+
+Maximize cost savings for dev/test:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: false
+```
+
+### 2. Use Dedicated Nodes Only When Needed
+
+Reserve dedicated nodes for production or compliance:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          environment: production
+```
+
+### 3. Implement Auto-Deletion
+
+Clean up abandoned environments (requires vCluster Platform):
+
+```yaml
+sleep:
+  afterInactivity: 2h
+  deleteAfter: 168h  # 7 days
+```
+
+### 4. Right-Size Control Plane Resources
+
+Don't over-provision vCluster control planes:
+
+```yaml
+controlPlane:
+  statefulSet:
+    resources:
+      requests:
+        cpu: 100m     # Start small
+        memory: 128Mi
+      limits:
+        memory: 1Gi   # Set upper bound
+```
+
+### 5. Use Embedded Components
+
+Reduce pod count and overhead:
+
+```yaml
+controlPlane:
+  backingStore:
+    database:
+      embedded:
+        enabled: true  # vs external etcd
+  coredns:
+    embedded: true  # vs separate deployment
+```
+
+### 6. Disable Unnecessary Features
+
+Don't enable features you don't need:
+
+```yaml
+integrations:
+  metricsServer:
+    enabled: false  # Only enable if needed
+  kubeVirt:
+    enabled: false
+  certManager:
+    enabled: false
+
+deploy:
+  metricsServer:
+    enabled: false
+  volumeSnapshotController:
+    enabled: false
+```
+
+### 7. Set Network Policies
+
+Prevent unnecessary egress traffic costs:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      publicEgress:
+        enabled: true
+        except:
+          - 0.0.0.0/0  # Deny all by default
+      egress:
+        - to:
+            - namespaceSelector:
+                matchLabels:
+                  name: kube-system
+```
+
+## Cost Comparison
+
+### Traditional Multi-Cluster Approach
+
+| Resource | Quantity | Cost/Month | Total |
+|----------|----------|------------|-------|
+| Control plane | 10 clusters | $100 | $1,000 |
+| Worker nodes | 30 nodes × $150 | $150 | $4,500 |
+| Load balancers | 10 × $20 | $20 | $200 |
+| **Total** | | | **$5,700** |
+
+### vCluster Approach
+
+| Resource | Quantity | Cost/Month | Total |
+|----------|----------|------------|-------|
+| Control plane | 1 host cluster | $100 | $100 |
+| Worker nodes | 10 nodes × $150 | $150 | $1,500 |
+| Load balancers | 1 × $20 | $20 | $20 |
+| vCluster overhead | 10 vClusters × $10 | $10 | $100 |
+| **Total** | | | **$1,720** |
+| **Savings** | | | **70%** |
+
+## Calculator: Estimate Your Savings
+
+```
+Current monthly cost = (# of clusters) × (control plane cost + node costs + LB costs)
+vCluster monthly cost = 1 × (control plane cost + consolidated node costs + 1 LB cost)
+
+Savings = Current cost - vCluster cost
+Savings % = (Savings / Current cost) × 100
+```
+
+**Example:**
+- 20 clusters
+- $100/cluster control plane
+- $500/cluster in nodes
+- $20/cluster load balancer
+
+```
+Current: 20 × ($100 + $500 + $20) = $12,400/month
+vCluster: 1 × ($100 + $3,000 + $20) + (20 × $10) = $3,320/month
+Savings: $12,400 - $3,320 = $9,080/month = 73% reduction
+```
+
+## Related Resources
+
+- [Cost Savings Overview](https://www.vcluster.com/cost-savings)
+- [Architecture: Shared Nodes](/vcluster/introduction/architecture/shared-nodes)
+- [Resource Quotas](/vcluster/policies/resource-quotas)
+- [vCluster Platform](https://www.vcluster.com/platform) (for Sleep Mode)
+- [Case Study: Fortune 500 Insurance](https://www.vcluster.com/case-studies/fortune-500-insurance-company)

@@ -1,0 +1,250 @@
+---
+title: "vcluster list"
+description: "List all virtual clusters"
+---
+
+## Synopsis
+
+Lists all virtual clusters in the current or specified namespace.
+
+```bash
+vcluster list [flags]
+```
+
+## Description
+
+The `list` command shows all vClusters that are accessible from your current Kubernetes context. It displays information about each vCluster including name, namespace, status, and connected status.
+
+## Examples
+
+### Basic Usage
+
+```bash
+# List all vClusters in all namespaces
+vcluster list
+
+# List vClusters in specific namespace
+vcluster list --namespace team-x
+
+# Short alias
+vcluster ls
+```
+
+### Different Output Formats
+
+```bash
+# Default table output
+vcluster list
+
+# JSON output for scripting
+vcluster list --output json
+
+# JSON with jq filtering
+vcluster list --output json | jq '.[] | select(.Status=="Running")'
+```
+
+### Filtering by Driver
+
+```bash
+# List only Helm-managed vClusters
+vcluster list --driver helm
+
+# List Platform-managed vClusters
+vcluster list --driver platform
+```
+
+## Flags
+
+<ParamField path="--namespace" type="string">
+  Filter vClusters by namespace. If not specified, lists from all namespaces.
+</ParamField>
+
+<ParamField path="--output" type="string" default="table">
+  Output format. Options: `table`, `json`.
+</ParamField>
+
+<ParamField path="--driver" type="string">
+  Filter by driver type. Options: `helm`, `platform`, `docker`.
+</ParamField>
+
+## Output Format
+
+### Table Output (Default)
+
+```
+NAME              NAMESPACE    STATUS    CONNECTED   CREATED                        AGE      CONTEXT
+my-vcluster       team-x       Running   True        2024-03-05 10:30:15 +0000 UTC  2d       vcluster_my-vcluster_team-x_kind-kind
+dev-vcluster      development  Running   False       2024-03-04 14:22:08 +0000 UTC  3d       
+staging-cluster   staging      Paused    False       2024-02-28 09:15:42 +0000 UTC  7d       
+```
+
+**Columns:**
+- **NAME** - vCluster name
+- **NAMESPACE** - Kubernetes namespace
+- **STATUS** - Current status (Running, Paused, Pending, Failed)
+- **CONNECTED** - Whether this is your active kubectl context
+- **CREATED** - Creation timestamp
+- **AGE** - Time since creation
+- **CONTEXT** - Kubeconfig context name
+
+### JSON Output
+
+```json
+[
+  {
+    "Name": "my-vcluster",
+    "Namespace": "team-x",
+    "Status": "Running",
+    "Connected": true,
+    "Created": "2024-03-05T10:30:15Z",
+    "Context": "vcluster_my-vcluster_team-x_kind-kind",
+    "Version": "0.30.0"
+  }
+]
+```
+
+## Status Values
+
+The STATUS column can show:
+
+- **Running** - vCluster is running normally
+- **Paused** - vCluster is paused (sleep mode)
+- **Pending** - vCluster is starting up
+- **Failed** - vCluster has errors
+- **Unknown** - Status cannot be determined
+
+## Practical Examples
+
+### List and Connect
+
+```bash
+# Find available vClusters
+vcluster list
+
+# Connect to one
+vcluster connect my-vcluster -n team-x
+
+# Verify connection
+vcluster list
+# Look for "True" in CONNECTED column
+```
+
+### Scripting with JSON Output
+
+```bash list-running.sh
+#!/bin/bash
+# Get all running vClusters
+running_vclusters=$(vcluster list --output json | jq -r '.[] | select(.Status=="Running") | .Name')
+
+for vc in $running_vclusters; do
+  echo "Processing $vc"
+  # Do something with each running vCluster
+done
+```
+
+### Filter by Namespace
+
+```bash
+# Production vClusters only
+vcluster list -n production
+
+# Development vClusters
+vcluster list -n dev-*  # Note: Requires kubectl namespace access
+```
+
+### Check All vClusters Status
+
+```bash check-health.sh
+#!/bin/bash
+vcluster list --output json | jq -r '.[] | "\(.Name) in \(.Namespace): \(.Status)"'
+```
+
+Output:
+```
+my-vcluster in team-x: Running
+dev-vcluster in development: Running
+staging-cluster in staging: Paused
+```
+
+## Platform Integration
+
+When using vCluster Platform:
+
+```bash
+# List Platform-managed vClusters
+vcluster list --driver platform
+
+# List in specific project
+vcluster list --driver platform --project my-project
+```
+
+## Combining with Other Commands
+
+### Delete All Paused vClusters
+
+```bash
+# List paused vClusters
+vcluster list --output json | jq -r '.[] | select(.Status=="Paused") | "\(.Name) -n \(.Namespace)"'
+
+# Delete them (be careful!)
+vcluster list --output json | \
+  jq -r '.[] | select(.Status=="Paused") | "\(.Name) -n \(.Namespace)"' | \
+  while read name namespace; do
+    vcluster delete $name $namespace
+  done
+```
+
+### Resume All Paused vClusters
+
+```bash
+vcluster list --output json | \
+  jq -r '.[] | select(.Status=="Paused") | [.Name, .Namespace] | @tsv' | \
+  while IFS=$'\t' read -r name namespace; do
+    echo "Resuming $name in $namespace"
+    vcluster resume $name -n $namespace
+  done
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="No vClusters shown">
+    If `vcluster list` shows no results:
+
+    ```bash
+    # Check if you have access to the namespace
+    kubectl get namespaces
+
+    # Check if vClusters exist
+    kubectl get pods --all-namespaces | grep vcluster
+
+    # Try specific namespace
+    vcluster list -n your-namespace
+    ```
+  </Accordion>
+
+  <Accordion title="Permission errors">
+    Ensure you have permissions to list resources:
+
+    ```bash
+    # Check your permissions
+    kubectl auth can-i list pods --all-namespaces
+    kubectl auth can-i get statefulsets --all-namespaces
+    ```
+  </Accordion>
+
+  <Accordion title="Wrong driver showing vClusters">
+    Specify the correct driver:
+
+    ```bash
+    vcluster list --driver helm  # For Helm-managed
+    vcluster list --driver platform  # For Platform-managed
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## See Also
+
+- [vcluster create](/cli/create) - Create a new vCluster
+- [vcluster connect](/cli/connect) - Connect to a vCluster
+- [vcluster delete](/cli/delete) - Delete a vCluster

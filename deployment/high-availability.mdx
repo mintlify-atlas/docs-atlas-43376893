@@ -1,0 +1,569 @@
+---
+title: High Availability
+description: Configure vCluster for production high availability deployments
+---
+
+This guide explains how to configure vCluster for high availability (HA) to ensure your virtual clusters remain operational even when individual components fail.
+
+## High Availability Overview
+
+A highly available vCluster deployment consists of:
+
+- **Multiple control plane replicas** (3 or more)
+- **Distributed etcd cluster** for data redundancy
+- **Pod anti-affinity** to spread replicas across nodes/zones
+- **Resource guarantees** to prevent eviction
+- **Persistent storage** with proper retention policies
+
+## Control Plane High Availability
+
+### Basic HA Configuration
+
+Configure multiple control plane replicas with leader election:
+
+```yaml
+controlPlane:
+  statefulSet:
+    highAvailability:
+      # Number of replicas (must be odd for quorum)
+      replicas: 3
+      
+      # Leader election settings
+      leaseDuration: 60      # seconds
+      renewDeadline: 40      # seconds  
+      retryPeriod: 15        # seconds
+    
+    # Ensure replicas spread across nodes
+    scheduling:
+      podManagementPolicy: Parallel
+      
+      # Anti-affinity to avoid single point of failure
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - vcluster
+                  - key: release
+                    operator: In
+                    values:
+                      - my-vcluster
+              topologyKey: kubernetes.io/hostname
+      
+      # Spread across availability zones
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: vcluster
+```
+
+### Understanding Leader Election
+
+When running multiple control plane replicas, vCluster uses leader election to ensure only one instance actively manages resources:
+
+- **leaseDuration**: How long a leader holds the lease (60s default)
+- **renewDeadline**: Time by which the leader must renew (40s default)
+- **retryPeriod**: How often non-leaders try to acquire lease (15s default)
+
+<Note>
+  The active leader performs all write operations while standby replicas remain ready to take over if the leader fails.
+</Note>
+
+## etcd High Availability
+
+For production deployments, use a highly available etcd cluster as the backing store.
+
+### Deployed etcd HA Configuration
+
+<Steps>
+  <Step title="Enable Deployed etcd">
+    Configure a 3-node etcd cluster:
+    
+    ```yaml
+    controlPlane:
+      backingStore:
+        etcd:
+          deploy:
+            enabled: true
+            
+            statefulSet:
+              # High availability configuration
+              highAvailability:
+                replicas: 3  # Must be odd number (3, 5, 7)
+              
+              image:
+                registry: "registry.k8s.io"
+                repository: "etcd"
+                tag: "3.6.4-0"
+              
+              # Resource allocation
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 512Mi
+                limits:
+                  cpu: 1000m
+                  memory: 2Gi
+              
+              # Persistent storage
+              persistence:
+                volumeClaim:
+                  enabled: true
+                  size: 10Gi
+                  storageClass: "fast-ssd"  # Use fast storage
+                  retentionPolicy: Retain
+                  accessModes: ["ReadWriteOnce"]
+    ```
+  </Step>
+
+  <Step title="Configure etcd Anti-Affinity">
+    Ensure etcd pods run on different nodes:
+    
+    ```yaml
+    controlPlane:
+      backingStore:
+        etcd:
+          deploy:
+            statefulSet:
+              scheduling:
+                podManagementPolicy: Parallel
+                
+                # Prevent co-location of etcd pods
+                affinity:
+                  podAntiAffinity:
+                    requiredDuringSchedulingIgnoredDuringExecution:
+                      - labelSelector:
+                          matchExpressions:
+                            - key: app
+                              operator: In
+                              values:
+                                - vcluster-etcd
+                            - key: release
+                              operator: In
+                              values:
+                                - my-vcluster
+                        topologyKey: kubernetes.io/hostname
+                
+                # Spread across zones
+                topologySpreadConstraints:
+                  - maxSkew: 1
+                    topologyKey: topology.kubernetes.io/zone
+                    whenUnsatisfiable: DoNotSchedule
+                    labelSelector:
+                      matchLabels:
+                        app: vcluster-etcd
+    ```
+  </Step>
+
+  <Step title="Verify etcd Cluster Health">
+    Check that all etcd members are running:
+    
+    ```bash
+    # Check etcd pods
+    kubectl get pods -n vcluster-my-vcluster -l app=vcluster-etcd
+    
+    # Expected output:
+    # NAME                READY   STATUS    RESTARTS   AGE
+    # my-vcluster-etcd-0   1/1     Running   0          5m
+    # my-vcluster-etcd-1   1/1     Running   0          5m
+    # my-vcluster-etcd-2   1/1     Running   0          5m
+    ```
+  </Step>
+</Steps>
+
+### etcd Cluster Quorum
+
+Understanding etcd quorum is critical for HA:
+
+| Cluster Size | Quorum Size | Fault Tolerance |
+|--------------|-------------|------------------|
+| 1            | 1           | 0 nodes          |
+| 3            | 2           | 1 node           |
+| 5            | 3           | 2 nodes          |
+| 7            | 4           | 3 nodes          |
+
+<Warning>
+  Always use an odd number of etcd replicas. Even numbers don't improve fault tolerance but increase the quorum requirement.
+</Warning>
+
+**Example**: With 3 etcd nodes:
+- Cluster remains operational if 1 node fails
+- Cluster becomes read-only if 2 nodes fail
+- Minimum 2 nodes needed for writes (quorum)
+
+## External etcd for Multi-Cluster HA
+
+For even higher availability, use an external managed etcd cluster:
+
+```yaml
+controlPlane:
+  backingStore:
+    etcd:
+      external:
+        enabled: true
+        endpoint: "etcd-cluster.example.com:2379"
+        
+        # TLS configuration
+        tls:
+          caFile: "/etc/etcd/ca.crt"
+          certFile: "/etc/etcd/client.crt"
+          keyFile: "/etc/etcd/client.key"
+```
+
+This approach:
+- Separates etcd lifecycle from vCluster
+- Allows sharing etcd across multiple vClusters
+- Enables independent scaling and maintenance
+- Supports external backup/restore strategies
+
+## Storage Configuration for HA
+
+### Persistent Volume Claims
+
+Ensure persistent storage survives pod restarts:
+
+```yaml
+controlPlane:
+  statefulSet:
+    persistence:
+      volumeClaim:
+        enabled: true
+        
+        # Size based on expected cluster size
+        size: 10Gi  # Increase for larger clusters
+        
+        # Use performant storage class
+        storageClass: "premium-rwo"  # SSD-backed recommended
+        
+        # Retention policy
+        retentionPolicy: Retain  # Keep PVCs after deletion
+        
+        # Access mode
+        accessModes: ["ReadWriteOnce"]
+```
+
+### Storage Class Selection
+
+Choose appropriate storage class for HA:
+
+```yaml
+# AWS Example - EBS gp3 with high IOPS
+storageClass: "ebs-gp3"
+
+# GCP Example - SSD persistent disks  
+storageClass: "pd-ssd"
+
+# Azure Example - Premium SSD
+storageClass: "managed-premium"
+
+# On-premises - Fast local SSD
+storageClass: "local-ssd"
+```
+
+<Note>
+  For etcd, always use SSD-backed storage. HDD storage can cause performance issues and cluster instability.
+</Note>
+
+## Resource Guarantees
+
+Prevent pod eviction by setting appropriate resource requests:
+
+```yaml
+controlPlane:
+  statefulSet:
+    # Higher priority prevents preemption
+    scheduling:
+      priorityClassName: "system-cluster-critical"
+    
+    # Resource guarantees
+    resources:
+      requests:
+        cpu: 500m       # Guaranteed CPU
+        memory: 1Gi     # Guaranteed memory
+        ephemeral-storage: 2Gi
+      limits:
+        cpu: 2000m      # Max CPU burst
+        memory: 4Gi     # Max memory
+        ephemeral-storage: 10Gi
+
+controlPlane:
+  backingStore:
+    etcd:
+      deploy:
+        statefulSet:
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+```
+
+## Pod Disruption Budgets
+
+Prevent too many pods from being disrupted simultaneously:
+
+```yaml
+controlPlane:
+  advanced:
+    podDisruptionBudget:
+      enabled: true
+      # Custom PDB via annotations
+      spec:
+        minAvailable: 2  # At least 2 replicas must be available
+        # OR
+        # maxUnavailable: 1  # At most 1 replica can be unavailable
+```
+
+Pod Disruption Budgets protect against:
+- Node drains during maintenance
+- Cluster autoscaler scale-downs
+- Voluntary disruptions
+
+## Complete HA Configuration Example
+
+Here's a complete production-ready HA configuration:
+
+```yaml values.yaml
+# High Availability vCluster Configuration
+controlPlane:
+  # Control plane HA
+  statefulSet:
+    highAvailability:
+      replicas: 3
+      leaseDuration: 60
+      renewDeadline: 40
+      retryPeriod: 15
+    
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+        ephemeral-storage: 2Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+        ephemeral-storage: 10Gi
+    
+    persistence:
+      volumeClaim:
+        enabled: true
+        size: 10Gi
+        storageClass: "fast-ssd"
+        retentionPolicy: Retain
+    
+    scheduling:
+      priorityClassName: "system-cluster-critical"
+      podManagementPolicy: Parallel
+      
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: vcluster
+              topologyKey: kubernetes.io/hostname
+      
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: vcluster
+  
+  # etcd HA
+  backingStore:
+    etcd:
+      deploy:
+        enabled: true
+        statefulSet:
+          highAvailability:
+            replicas: 3
+          
+          image:
+            registry: "registry.k8s.io"
+            repository: "etcd"
+            tag: "3.6.4-0"
+          
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+          
+          persistence:
+            volumeClaim:
+              enabled: true
+              size: 10Gi
+              storageClass: "fast-ssd"
+              retentionPolicy: Retain
+          
+          scheduling:
+            podManagementPolicy: Parallel
+            priorityClassName: "system-cluster-critical"
+            
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchLabels:
+                        app: vcluster-etcd
+                    topologyKey: kubernetes.io/hostname
+            
+            topologySpreadConstraints:
+              - maxSkew: 1
+                topologyKey: topology.kubernetes.io/zone
+                whenUnsatisfiable: DoNotSchedule
+  
+  # Pod Disruption Budget
+  advanced:
+    podDisruptionBudget:
+      enabled: true
+  
+  # CoreDNS HA
+  coredns:
+    deployment:
+      replicas: 2
+      resources:
+        requests:
+          cpu: 20m
+          memory: 64Mi
+        limits:
+          cpu: 1000m
+          memory: 170Mi
+
+# Resource policies
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.cpu: 20
+      requests.memory: 40Gi
+      requests.storage: "200Gi"
+```
+
+## Monitoring HA Health
+
+### Check Control Plane Status
+
+```bash
+# Check control plane pods
+kubectl get pods -n vcluster-my-vcluster -l app=vcluster
+
+# Check which pod is the leader
+kubectl logs -n vcluster-my-vcluster my-vcluster-0 | grep "leader"
+
+# Check lease information
+kubectl get lease -n vcluster-my-vcluster
+```
+
+### Check etcd Cluster Health
+
+```bash
+# Exec into etcd pod
+kubectl exec -n vcluster-my-vcluster my-vcluster-etcd-0 -- sh -c \
+  "ETCDCTL_API=3 etcdctl \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/etcd/pki/ca.crt \
+  --cert=/etc/etcd/pki/server.crt \
+  --key=/etc/etcd/pki/server.key \
+  endpoint health"
+
+# Check etcd member list
+kubectl exec -n vcluster-my-vcluster my-vcluster-etcd-0 -- sh -c \
+  "ETCDCTL_API=3 etcdctl \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/etcd/pki/ca.crt \
+  --cert=/etc/etcd/pki/server.crt \
+  --key=/etc/etcd/pki/server.key \
+  member list"
+```
+
+## Disaster Recovery
+
+### Backup Strategies
+
+**etcd Snapshots**: Regular backups of etcd data:
+
+```bash
+# Create etcd snapshot
+kubectl exec -n vcluster-my-vcluster my-vcluster-etcd-0 -- sh -c \
+  "ETCDCTL_API=3 etcdctl \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/etcd/pki/ca.crt \
+  --cert=/etc/etcd/pki/server.crt \
+  --key=/etc/etcd/pki/server.key \
+  snapshot save /tmp/snapshot.db"
+
+# Copy snapshot locally
+kubectl cp vcluster-my-vcluster/my-vcluster-etcd-0:/tmp/snapshot.db ./snapshot.db
+```
+
+**PVC Snapshots**: Use volume snapshots if supported:
+
+```yaml
+sync:
+  toHost:
+    volumeSnapshots:
+      enabled: true
+    volumeSnapshotContents:
+      enabled: true
+```
+
+### Testing HA Failover
+
+Validate your HA setup by simulating failures:
+
+```bash
+# Delete one control plane pod
+kubectl delete pod -n vcluster-my-vcluster my-vcluster-0
+
+# Watch for automatic recovery
+kubectl get pods -n vcluster-my-vcluster -w
+
+# Verify cluster still works
+vcluster connect my-vcluster -n vcluster-my-vcluster
+kubectl get nodes
+```
+
+## Common HA Pitfalls
+
+### Insufficient Node Resources
+
+**Problem**: All replicas scheduled on same node due to resource constraints.
+
+**Solution**: Ensure cluster has adequate resources across multiple nodes/zones.
+
+### Wrong Storage Class
+
+**Problem**: Using HDD or network storage for etcd causes performance issues.
+
+**Solution**: Always use SSD-backed storage for etcd.
+
+### Even Number of Replicas
+
+**Problem**: Using 2 or 4 etcd replicas doesn't improve fault tolerance.
+
+**Solution**: Use odd numbers (3, 5, 7) for proper quorum.
+
+### Missing Anti-Affinity
+
+**Problem**: Multiple replicas on same node create single point of failure.
+
+**Solution**: Configure pod anti-affinity as shown in examples above.
+
+## Next Steps
+
+- [Networking Configuration](/deployment/networking) - Configure networking for HA setups
+- [Storage Configuration](/deployment/storage) - Advanced storage options
+- [Configuration](/deployment/configuration) - Explore all configuration options

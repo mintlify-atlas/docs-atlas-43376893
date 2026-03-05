@@ -1,0 +1,492 @@
+---
+title: RBAC Configuration
+description: Configure Role-Based Access Control for vCluster deployments
+---
+
+vCluster implements a comprehensive RBAC system that operates at both the host cluster and virtual cluster levels. This page explains how to configure and manage RBAC for secure multi-tenant environments.
+
+## RBAC Architecture
+
+vCluster uses a two-tier RBAC model:
+
+1. **Host Cluster RBAC**: Controls what vCluster can do in the host cluster
+2. **Virtual Cluster RBAC**: Controls what users can do inside the vCluster
+
+## Host Cluster RBAC
+
+vCluster requires specific permissions in the host cluster to function. These permissions are managed through Kubernetes RBAC resources.
+
+### ClusterRole Permissions
+
+When vCluster needs cluster-wide permissions, a ClusterRole is created:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vcluster-my-vcluster
+rules:
+  # Node access for scheduler
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/status"]
+    verbs: ["get", "watch", "list"]
+  
+  # Storage classes for PVC provisioning
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "csinodes", "csidrivers"]
+    verbs: ["get", "watch", "list"]
+  
+  # Persistent volumes for storage
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["create", "delete", "patch", "update", "get", "list", "watch"]
+```
+
+From `chart/templates/clusterrole.yaml`:
+
+```yaml
+rules:
+  # Platform integration
+  - apiGroups: ["cluster.loft.sh", "storage.loft.sh"]
+    resources: ["features", "virtualclusters"]
+    verbs: ["get", "list", "watch"]
+  
+  # Node syncing
+  - apiGroups: [""]
+    resources: ["pods", "nodes", "nodes/status"]
+    verbs: ["get", "watch", "list"]
+```
+
+### Role Permissions (Namespace-Scoped)
+
+For namespace-scoped operations, vCluster uses a Role:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vc-my-vcluster
+  namespace: my-vcluster-namespace
+rules:
+  # Core workload resources
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "services", "pods", "persistentvolumeclaims"]
+    verbs: ["create", "delete", "patch", "update", "get", "list", "watch"]
+  
+  # Pod operations
+  - apiGroups: [""]
+    resources: ["pods/attach", "pods/portforward", "pods/exec", "pods/log"]
+    verbs: ["get", "list", "watch", "create"]
+  
+  # Pod status updates
+  - apiGroups: [""]
+    resources: ["pods/status", "pods/ephemeralcontainers"]
+    verbs: ["patch", "update"]
+  
+  # Events
+  - apiGroups: ["", "events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "get", "list", "watch"]
+```
+
+### ServiceAccount Configuration
+
+vCluster uses ServiceAccounts for authentication:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vc-my-vcluster
+  namespace: my-vcluster-namespace
+automountServiceAccountToken: true
+```
+
+Bind the ServiceAccount to RBAC roles:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vc-my-vcluster
+  namespace: my-vcluster-namespace
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vc-my-vcluster
+subjects:
+  - kind: ServiceAccount
+    name: vc-my-vcluster
+    namespace: my-vcluster-namespace
+```
+
+## Custom RBAC Rules
+
+### Override ClusterRole Rules
+
+Customize the vCluster ClusterRole:
+
+```yaml
+rbac:
+  clusterRole:
+    overwriteRules:
+      # Custom rules replace defaults
+      - apiGroups: [""]
+        resources: ["nodes"]
+        verbs: ["get", "list"]
+      - apiGroups: ["storage.k8s.io"]
+        resources: ["storageclasses"]
+        verbs: ["get", "list", "watch"]
+```
+
+### Add Extra Rules
+
+Extend existing rules without replacing them:
+
+```yaml
+rbac:
+  clusterRole:
+    extraRules:
+      - apiGroups: ["custom.io"]
+        resources: ["customresources"]
+        verbs: ["get", "list", "watch"]
+```
+
+### Override Role Rules
+
+Customize namespace-scoped permissions:
+
+```yaml
+rbac:
+  role:
+    enabled: true
+    overwriteRules:
+      - apiGroups: [""]
+        resources: ["pods", "services"]
+        verbs: ["get", "list"]
+```
+
+## Virtual Cluster RBAC
+
+Inside the vCluster, standard Kubernetes RBAC applies. Users and ServiceAccounts are managed independently.
+
+### Creating Users
+
+Create a ServiceAccount in the vCluster:
+
+```bash
+# Connect to vCluster
+vcluster connect my-vcluster
+
+# Create ServiceAccount
+kubectl create serviceaccount developer
+```
+
+### Creating Roles
+
+Define a Role for developers:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: developer
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+```
+
+### Creating RoleBindings
+
+Bind the Role to a ServiceAccount:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: developer-binding
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: developer
+subjects:
+  - kind: ServiceAccount
+    name: developer
+    namespace: default
+```
+
+### Cluster-Wide Roles
+
+Create ClusterRoles for cluster-wide permissions:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-viewer
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "nodes", "persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+```
+
+Bind with a ClusterRoleBinding:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cluster-viewer-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-viewer
+subjects:
+  - kind: ServiceAccount
+    name: viewer
+    namespace: default
+```
+
+## Delegating Authorization
+
+vCluster implements delegating authorization to validate requests against the host cluster:
+
+```go
+// From pkg/authorization/delegatingauthorizer/authorizer.go
+func (l *delegatingAuthorizer) Authorize(ctx context.Context, a authorizer.Attributes) (authorized authorizer.Decision, reason string, err error) {
+    // Check if request applies to delegated resources
+    if !applies(a, l.resources, l.nonResources) {
+        return authorizer.DecisionNoOpinion, "", nil
+    }
+    
+    // Create SubjectAccessReview for host cluster
+    accessReview := &authorizationv1.SubjectAccessReview{
+        Spec: authorizationv1.SubjectAccessReviewSpec{
+            User:   a.GetUser().GetName(),
+            Groups: a.GetUser().GetGroups(),
+            ResourceAttributes: &authorizationv1.ResourceAttributes{
+                Namespace: a.GetNamespace(),
+                Verb:      a.GetVerb(),
+                Resource:  a.GetResource(),
+            },
+        },
+    }
+    
+    err = l.delegatingClient.Create(ctx, accessReview)
+    if err != nil {
+        return authorizer.DecisionDeny, "", err
+    }
+    
+    if accessReview.Status.Allowed && !accessReview.Status.Denied {
+        return authorizer.DecisionAllow, "", nil
+    }
+    
+    return authorizer.DecisionDeny, accessReview.Status.Reason, nil
+}
+```
+
+## Impersonation
+
+vCluster supports user impersonation for elevated operations:
+
+```go
+// From pkg/authorization/impersonationauthorizer/authorizer.go
+func (i *impersonationAuthorizer) Authorize(ctx context.Context, a authorizer.Attributes) (authorized authorizer.Decision, reason string, err error) {
+    if a.GetVerb() != "impersonate" || !a.IsResourceRequest() {
+        return authorizer.DecisionNoOpinion, "", nil
+    }
+    
+    // Validate impersonation request against host cluster
+    accessReview := &authorizationv1.SubjectAccessReview{
+        Spec: authorizationv1.SubjectAccessReviewSpec{
+            ResourceAttributes: &authorizationv1.ResourceAttributes{
+                Verb:     "impersonate",
+                Resource: a.GetResource(),
+                Name:     a.GetName(),
+            },
+        },
+    }
+    // ...
+}
+```
+
+Use impersonation in kubectl:
+
+```bash
+kubectl get pods --as=developer --as-group=developers
+```
+
+## Multi-Namespace Mode
+
+When multi-namespace mode is enabled, vCluster can manage resources across namespaces:
+
+```yaml
+sync:
+  toHost:
+    namespaces:
+      enabled: true
+```
+
+This creates a ClusterRole instead of a Role:
+
+```yaml
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: vc-my-vcluster-multi
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "serviceaccounts"]
+    verbs: ["create", "delete", "patch", "update", "get", "watch", "list"]
+```
+
+## Best Practices
+
+### Principle of Least Privilege
+
+Grant only the minimum required permissions:
+
+```yaml
+rbac:
+  clusterRole:
+    overwriteRules:
+      # Only enable required verbs
+      - apiGroups: [""]
+        resources: ["nodes"]
+        verbs: ["get", "list"]  # No update/delete
+```
+
+### Separate ServiceAccounts
+
+Use different ServiceAccounts for different components:
+
+```yaml
+controlPlane:
+  advanced:
+    workloadServiceAccount:
+      name: vcluster-workload-sa
+    headlessServiceAccount:
+      name: vcluster-headless-sa
+```
+
+### Regular Audits
+
+Audit RBAC configurations regularly:
+
+```bash
+# List all ClusterRoles
+kubectl get clusterroles | grep vcluster
+
+# View ClusterRole details
+kubectl describe clusterrole vcluster-my-vcluster
+
+# Check RoleBindings
+kubectl get rolebindings -n vcluster-namespace
+```
+
+### Use Namespaces for Isolation
+
+Isolate vClusters in separate namespaces:
+
+```bash
+kubectl create namespace team-a-vcluster
+kubectl create namespace team-b-vcluster
+
+vcluster create team-a --namespace team-a-vcluster
+vcluster create team-b --namespace team-b-vcluster
+```
+
+### Limit Impersonation
+
+Restrict impersonation to trusted users:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: limited-impersonation
+rules:
+  - apiGroups: [""]
+    resources: ["users", "groups", "serviceaccounts"]
+    verbs: ["impersonate"]
+    resourceNames: ["specific-user"]  # Limit to specific users
+```
+
+## Testing RBAC
+
+### Test ServiceAccount Permissions
+
+```bash
+# Test if ServiceAccount can list pods
+kubectl auth can-i list pods \
+  --as=system:serviceaccount:default:developer \
+  -n default
+
+# Test with specific verb
+kubectl auth can-i delete deployments \
+  --as=system:serviceaccount:default:developer \
+  -n production
+```
+
+### Verify ClusterRole Permissions
+
+```bash
+# Check what resources a ClusterRole can access
+kubectl describe clusterrole vcluster-my-vcluster
+
+# List all permissions for a user
+kubectl auth can-i --list --as=developer
+```
+
+## Troubleshooting
+
+### Permission Denied Errors
+
+Check ServiceAccount permissions:
+
+```bash
+# Get ServiceAccount
+kubectl get sa vc-my-vcluster -n vcluster-namespace
+
+# Check RoleBindings
+kubectl get rolebindings -n vcluster-namespace -o yaml
+
+# Verify ClusterRoleBindings
+kubectl get clusterrolebindings | grep vcluster
+```
+
+### Missing Resources
+
+Verify RBAC rules include required resources:
+
+```bash
+# Check if vCluster can access nodes
+kubectl auth can-i list nodes \
+  --as=system:serviceaccount:vcluster-namespace:vc-my-vcluster
+```
+
+### Unauthorized Errors
+
+Enable audit logging to debug authorization:
+
+```yaml
+controlPlane:
+  advanced:
+    auditLog:
+      enabled: true
+```
+
+## Further Reading
+
+- [Multi-Tenancy Isolation](/security/isolation)
+- [Certificate Management](/security/certificates)
+- [Kubernetes RBAC Documentation](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)

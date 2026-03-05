@@ -1,0 +1,164 @@
+---
+title: "CLI Overview"
+description: "Complete reference for the vCluster command-line interface"
+---
+
+## Introduction
+
+The vCluster CLI (`vcluster`) is the primary tool for managing virtual Kubernetes clusters. It provides commands for creating, connecting to, managing, and deleting virtual clusters.
+
+## Installation
+
+See the [Installation Guide](/installation) for detailed installation instructions.
+
+## Global Flags
+
+All vCluster commands support the following global flags:
+
+| Flag | Description | Default |
+|------|-------------|--------|
+| `--context string` | The kubernetes config context to use | Current context |
+| `--namespace string, -n` | The kubernetes namespace to use | `vcluster` |
+| `--config string` | Path to vcluster config file | `~/.vcluster/config.json` |
+| `--debug` | Enable debug logging | `false` |
+| `--silent` | Run in silent mode | `false` |
+
+## Driver Selection
+
+Many commands support a `--driver` flag to specify how to manage the virtual cluster:
+
+- **`helm`** - Manage vCluster using Helm (default)
+- **`platform`** - Use vCluster Platform for management
+- **`docker`** - Run vCluster locally in Docker
+
+The driver can also be configured in the vCluster config file.
+
+## Core Commands
+
+Here's a quick overview of the main vCluster commands:
+
+<CardGroup cols={2}>
+  <Card title="create" icon="plus" href="/cli/create">
+    Create a new virtual cluster
+  </Card>
+  <Card title="connect" icon="link" href="/cli/connect">
+    Connect to an existing virtual cluster
+  </Card>
+  <Card title="list" icon="list" href="/cli/list">
+    List all virtual clusters
+  </Card>
+  <Card title="delete" icon="trash" href="/cli/delete">
+    Delete a virtual cluster
+  </Card>
+  <Card title="pause" icon="pause" href="/cli/pause">
+    Pause a running virtual cluster
+  </Card>
+  <Card title="resume" icon="play" href="/cli/resume">
+    Resume a paused virtual cluster
+  </Card>
+  <Card title="upgrade" icon="arrow-up" href="/cli/upgrade">
+    Upgrade vCluster components
+  </Card>
+  <Card title="snapshot" icon="camera" href="/cli/snapshot">
+    Create and manage snapshots
+  </Card>
+</CardGroup>
+
+## Management Commands
+
+<CardGroup cols={2}>
+  <Card title="node" icon="server" href="/cli/node">
+    Manage virtual cluster nodes
+  </Card>
+  <Card title="token" icon="key" href="/cli/token">
+    Manage authentication tokens
+  </Card>
+  <Card title="debug" icon="bug" href="/cli/debug">
+    Debug virtual cluster issues
+  </Card>
+  <Card title="restore" icon="clock-rotate-left" href="/cli/restore">
+    Restore from a snapshot
+  </Card>
+</CardGroup>
+
+## Common Workflows
+
+### Creating and Connecting
+
+```bash
+# Create and auto-connect
+vcluster create my-vcluster -n team-x
+
+# Create without connecting
+vcluster create my-vcluster -n team-x --connect=false
+
+# Connect later
+vcluster connect my-vcluster -n team-x
+```
+
+### Listing and Managing
+
+```bash
+# List all vclusters
+vcluster list
+
+# List in specific namespace
+vcluster list -n team-x
+
+# JSON output
+vcluster list --output json
+```
+
+### Cleanup
+
+```bash
+# Delete a vcluster
+vcluster delete my-vcluster -n team-x
+
+# Delete without confirmation
+vcluster delete my-vcluster -n team-x --delete-namespace
+```
+
+## Output Formats
+
+Many commands support different output formats:
+
+- **`table`** (default) - Human-readable table format
+- **`json`** - JSON output for scripting
+- **`yaml`** - YAML output
+
+## Exit Codes
+
+The vCluster CLI uses standard exit codes:
+
+- **0** - Success
+- **1** - General error
+- **2** - Command-line usage error
+
+## Environment Variables
+
+The CLI respects these environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `KUBECONFIG` | Path to kubeconfig file |
+| `VCLUSTER_TELEMETRY` | Disable telemetry (`false`) |
+
+## Getting Help
+
+For detailed help on any command:
+
+```bash
+vcluster [command] --help
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Create Command" icon="plus" href="/cli/create">
+    Learn how to create virtual clusters with all available options
+  </Card>
+  <Card title="Configuration" icon="gear" href="/config/values-reference">
+    Explore configuration options for customizing your virtual clusters
+  </Card>
+</CardGroup>

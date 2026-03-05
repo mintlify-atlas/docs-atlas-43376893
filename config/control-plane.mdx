@@ -1,0 +1,437 @@
+---
+title: Control Plane Configuration
+description: Configure vCluster's control plane components and deployment
+---
+
+The control plane configuration defines how vCluster's core components are deployed and managed, including the Kubernetes distribution, backing store, networking, and resource allocation.
+
+## Distro Configuration
+
+<ParamField path="controlPlane.distro.k8s" type="object">
+  Kubernetes distribution configuration. Only one distro can be enabled at a time.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable the K8s distro.
+    </ParamField>
+
+    <ParamField path="version" type="string">
+      Kubernetes version to use (e.g., `v1.35.0`).
+    </ParamField>
+
+    <ParamField path="image" type="object">
+      Container image configuration.
+      
+      <Expandable title="properties">
+        <ParamField path="registry" type="string" default="ghcr.io">
+          Registry of the container image.
+        </ParamField>
+        
+        <ParamField path="repository" type="string" default="loft-sh/kubernetes">
+          Repository of the container image.
+        </ParamField>
+        
+        <ParamField path="tag" type="string" default="v1.35.0">
+          Tag of the container image.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="apiServer" type="object">
+      API server configuration.
+      
+      <Expandable title="properties">
+        <ParamField path="enabled" type="boolean" default="true">
+          Enable the API server.
+        </ParamField>
+        
+        <ParamField path="command" type="array">
+          Override the command to start the API server binary.
+        </ParamField>
+        
+        <ParamField path="extraArgs" type="array">
+          Additional arguments to pass to the API server.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="controllerManager" type="object">
+      Controller manager configuration.
+      
+      <Expandable title="properties">
+        <ParamField path="enabled" type="boolean" default="true">
+          Enable the controller manager.
+        </ParamField>
+        
+        <ParamField path="command" type="array">
+          Override the command to start the controller manager binary.
+        </ParamField>
+        
+        <ParamField path="extraArgs" type="array">
+          Additional arguments to pass to the controller manager.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="scheduler" type="object">
+      Scheduler configuration.
+      
+      <Expandable title="properties">
+        <ParamField path="enabled" type="boolean" default="false">
+          Enable the virtual cluster scheduler.
+        </ParamField>
+        
+        <ParamField path="command" type="array">
+          Override the command to start the scheduler binary.
+        </ParamField>
+        
+        <ParamField path="extraArgs" type="array">
+          Additional arguments to pass to the scheduler.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="env" type="array">
+      Extra environment variables for the main container (not init container).
+    </ParamField>
+
+    <ParamField path="resources" type="object">
+      Resource requests and limits for the distro init container.
+      
+      <Expandable title="properties">
+        <ParamField path="limits.cpu" type="string" default="100m">
+          CPU limit.
+        </ParamField>
+        
+        <ParamField path="limits.memory" type="string" default="256Mi">
+          Memory limit.
+        </ParamField>
+        
+        <ParamField path="requests.cpu" type="string" default="40m">
+          CPU request.
+        </ParamField>
+        
+        <ParamField path="requests.memory" type="string" default="64Mi">
+          Memory request.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Backing Store
+
+<ParamField path="controlPlane.backingStore" type="object">
+  Configure which backing store to use for the virtual cluster.
+
+  <Expandable title="properties">
+    <ParamField path="database.embedded" type="object">
+      Embedded SQLite database configuration.
+      
+      <Expandable title="properties">
+        <ParamField path="enabled" type="boolean" default="false">
+          Use embedded SQLite database.
+        </ParamField>
+        
+        <ParamField path="extraArgs" type="array">
+          Additional arguments to pass to Kine.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="database.external" type="object">
+      External database configuration (MySQL, PostgreSQL).
+      
+      <Expandable title="properties">
+        <ParamField path="enabled" type="boolean" default="false">
+          Use external database.
+        </ParamField>
+        
+        <ParamField path="dataSource" type="string">
+          Kine data source connection string.
+          - MySQL: `mysql://username:password@tcp(hostname:3306)/vcluster`
+          - PostgreSQL: `postgres://username:password@hostname:5432/vcluster`
+        </ParamField>
+        
+        <ParamField path="identityProvider" type="string">
+          Identity provider for temporary authentication tokens (e.g., `aws` for RDS IAM).
+        </ParamField>
+        
+        <ParamField path="certFile" type="string">
+          Path to TLS certificate file.
+        </ParamField>
+        
+        <ParamField path="keyFile" type="string">
+          Path to TLS key file.
+        </ParamField>
+        
+        <ParamField path="caFile" type="string">
+          Path to CA certificate file.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="etcd.embedded" type="object">
+      Embedded etcd configuration.
+      
+      <Expandable title="properties">
+        <ParamField path="enabled" type="boolean" default="false">
+          Use embedded etcd.
+        </ParamField>
+        
+        <ParamField path="migrateFromDeployedEtcd" type="boolean" default="false">
+          Migrate from deployed external etcd to embedded etcd.
+        </ParamField>
+        
+        <ParamField path="extraArgs" type="array">
+          Additional arguments to pass to etcd.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="etcd.deploy" type="object">
+      Deploy external etcd as a StatefulSet.
+      
+      <Expandable title="properties">
+        <ParamField path="enabled" type="boolean" default="false">
+          Deploy external etcd.
+        </ParamField>
+        
+        <ParamField path="statefulSet" type="object">
+          StatefulSet configuration for etcd.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## StatefulSet Configuration
+
+<ParamField path="controlPlane.statefulSet" type="object">
+  Configure the vCluster control plane StatefulSet.
+
+  <Expandable title="properties">
+    <ParamField path="image" type="object">
+      Container image for the control plane.
+      
+      <Expandable title="properties">
+        <ParamField path="registry" type="string" default="ghcr.io">
+          Container registry.
+        </ParamField>
+        
+        <ParamField path="repository" type="string" default="loft-sh/vcluster-pro">
+          Image repository. Use `loft-sh/vcluster-oss` for pure OSS build.
+        </ParamField>
+        
+        <ParamField path="tag" type="string">
+          Image tag (defaults to chart app version).
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="resources" type="object">
+      Resource requests and limits.
+      
+      <Expandable title="properties">
+        <ParamField path="limits.cpu" type="string">
+          CPU limit.
+        </ParamField>
+        
+        <ParamField path="limits.memory" type="string" default="4Gi">
+          Memory limit.
+        </ParamField>
+        
+        <ParamField path="limits.ephemeral-storage" type="string" default="10Gi">
+          Ephemeral storage limit.
+        </ParamField>
+        
+        <ParamField path="requests.cpu" type="string" default="200m">
+          CPU request.
+        </ParamField>
+        
+        <ParamField path="requests.memory" type="string" default="256Mi">
+          Memory request.
+        </ParamField>
+        
+        <ParamField path="requests.ephemeral-storage" type="string" default="1Gi">
+          Ephemeral storage request.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="highAvailability" type="object">
+      High availability configuration.
+      
+      <Expandable title="properties">
+        <ParamField path="replicas" type="number" default="1">
+          Number of control plane replicas.
+        </ParamField>
+        
+        <ParamField path="leaseDuration" type="number" default="60">
+          Leader election lease duration (seconds).
+        </ParamField>
+        
+        <ParamField path="renewDeadline" type="number" default="40">
+          Leader election renew deadline (seconds).
+        </ParamField>
+        
+        <ParamField path="retryPeriod" type="number" default="15">
+          Leader election retry period (seconds).
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="persistence" type="object">
+      Persistence configuration.
+      
+      <Expandable title="properties">
+        <ParamField path="volumeClaim.enabled" type="string" default="auto">
+          Enable persistent volume claim. `auto` determines based on distro and options.
+        </ParamField>
+        
+        <ParamField path="volumeClaim.size" type="string" default="5Gi">
+          Storage size.
+        </ParamField>
+        
+        <ParamField path="volumeClaim.storageClass" type="string">
+          Storage class name.
+        </ParamField>
+        
+        <ParamField path="volumeClaim.retentionPolicy" type="string" default="Retain">
+          Volume retention policy.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="probes" type="object">
+      Container health probes.
+      
+      <Expandable title="properties">
+        <ParamField path="livenessProbe.enabled" type="boolean" default="true">
+          Enable liveness probe.
+        </ParamField>
+        
+        <ParamField path="readinessProbe.enabled" type="boolean" default="true">
+          Enable readiness probe.
+        </ParamField>
+        
+        <ParamField path="startupProbe.enabled" type="boolean" default="true">
+          Enable startup probe.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## CoreDNS Configuration
+
+<ParamField path="controlPlane.coredns" type="object">
+  CoreDNS deployment configuration.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable CoreDNS.
+    </ParamField>
+
+    <ParamField path="embedded" type="boolean" default="false" pro>
+      Run CoreDNS embedded within the control plane (PRO feature).
+    </ParamField>
+
+    <ParamField path="deployment.replicas" type="number" default="1">
+      Number of CoreDNS replicas.
+    </ParamField>
+
+    <ParamField path="deployment.resources" type="object">
+      Resource requests and limits for CoreDNS.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Service and Ingress
+
+<ParamField path="controlPlane.service" type="object">
+  Control plane service configuration.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable the control plane service.
+    </ParamField>
+
+    <ParamField path="spec.type" type="string" default="ClusterIP">
+      Service type (ClusterIP, NodePort, LoadBalancer).
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="controlPlane.ingress" type="object">
+  Control plane ingress configuration.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable ingress for the control plane.
+    </ParamField>
+
+    <ParamField path="host" type="string" default="my-host.com">
+      Hostname where vCluster will be reachable.
+    </ParamField>
+
+    <ParamField path="pathType" type="string" default="ImplementationSpecific">
+      Ingress path type.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Example: External Database
+
+```yaml
+controlPlane:
+  backingStore:
+    database:
+      external:
+        enabled: true
+        dataSource: postgres://vcluster:password@postgres.example.com:5432/vcluster
+        certFile: /certs/client-cert.pem
+        keyFile: /certs/client-key.pem
+        caFile: /certs/ca.pem
+```
+
+## Example: High Availability
+
+```yaml
+controlPlane:
+  statefulSet:
+    highAvailability:
+      replicas: 3
+      leaseDuration: 60
+      renewDeadline: 40
+      retryPeriod: 15
+    resources:
+      limits:
+        cpu: 2
+        memory: 8Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+```
+
+## Example: Custom Kubernetes Version
+
+```yaml
+controlPlane:
+  distro:
+    k8s:
+      enabled: true
+      version: v1.30.0
+      image:
+        registry: ghcr.io
+        repository: loft-sh/kubernetes
+        tag: v1.30.0
+      scheduler:
+        enabled: true
+```
+
+## Related Configuration
+
+- See [Storage Options](/config/storage-options) for persistence configuration
+- See [Networking Options](/config/networking-options) for service and DNS settings
+- See [Values Reference](/config/values-reference) for all configuration options

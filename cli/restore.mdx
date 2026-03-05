@@ -1,0 +1,114 @@
+---
+title: "vcluster restore"
+description: "Restore a virtual cluster from a snapshot"
+---
+
+## Synopsis
+
+Restore a virtual cluster from a previously created snapshot.
+
+```bash
+vcluster restore VCLUSTER_NAME [flags]
+```
+
+## Description
+
+The `restore` command recreates a virtual cluster from a snapshot, including all resources and data.
+
+## Examples
+
+```bash
+# Restore from specific snapshot
+vcluster restore my-vcluster -n team-x \
+  --snapshot my-snapshot \
+  --backend oci://myregistry.io/snapshots
+
+# Restore to different namespace
+vcluster restore my-vcluster -n new-namespace \
+  --snapshot backup-20240305 \
+  --backend oci://myregistry.io/snapshots
+
+# Restore with volumes
+vcluster restore my-vcluster -n team-x \
+  --snapshot backup-20240305 \
+  --backend oci://myregistry.io/snapshots \
+  --restore-volumes
+```
+
+## Flags
+
+<ParamField path="--namespace" type="string" required>
+  The target namespace for the restored vCluster.
+</ParamField>
+
+<ParamField path="--snapshot" type="string" required>
+  The name of the snapshot to restore from.
+</ParamField>
+
+<ParamField path="--backend" type="string" required>
+  Storage backend where the snapshot is stored.
+</ParamField>
+
+<ParamField path="--restore-volumes" type="boolean">
+  Restore persistent volume data.
+</ParamField>
+
+<ParamField path="--driver" type="string" default="helm">
+  The driver to use.
+</ParamField>
+
+## Restore Process
+
+<Steps>
+  <Step title="Validate Snapshot">
+    Verify the snapshot exists and is accessible.
+  </Step>
+  
+  <Step title="Create vCluster">
+    Deploy a new vCluster instance.
+  </Step>
+  
+  <Step title="Restore etcd Data">
+    Load the control plane state from the snapshot.
+  </Step>
+  
+  <Step title="Restore Volumes (Optional)">
+    If `--restore-volumes` is set, restore PVC data.
+  </Step>
+  
+  <Step title="Reconcile">
+    Sync resources between virtual and host cluster.
+  </Step>
+</Steps>
+
+## Complete Example
+
+```bash disaster-recovery.sh
+#!/bin/bash
+VCLUSTER="prod-vcluster"
+OLD_NAMESPACE="production"
+NEW_NAMESPACE="production-restore"
+BACKEND="oci://myregistry.io/backups"
+
+# List available snapshots
+echo "Available snapshots:"
+vcluster snapshot get $VCLUSTER -n $OLD_NAMESPACE --backend $BACKEND
+
+# Restore from latest snapshot
+LATEST_SNAPSHOT=$(vcluster snapshot get $VCLUSTER -n $OLD_NAMESPACE --backend $BACKEND --output json | jq -r '.[0].Name')
+
+echo "Restoring from $LATEST_SNAPSHOT"
+vcluster restore $VCLUSTER -n $NEW_NAMESPACE \
+  --snapshot $LATEST_SNAPSHOT \
+  --backend $BACKEND \
+  --restore-volumes
+
+# Connect and verify
+vcluster connect $VCLUSTER -n $NEW_NAMESPACE
+kubectl get all --all-namespaces
+```
+
+## See Also
+
+- [vcluster snapshot](/cli/snapshot) - Create snapshots
+- [Backup and Restore](/operations/backup-restore) - Complete B&R documentation

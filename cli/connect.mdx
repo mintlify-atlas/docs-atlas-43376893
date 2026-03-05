@@ -1,0 +1,274 @@
+---
+title: "vcluster connect"
+description: "Connect to an existing virtual cluster"
+---
+
+## Synopsis
+
+Connects to an existing virtual cluster by updating your kubeconfig.
+
+```bash
+vcluster connect VCLUSTER_NAME [flags] [-- COMMAND]
+```
+
+## Description
+
+The `connect` command updates your kubectl context to point to the specified virtual cluster. It can also execute commands directly within the vCluster context.
+
+## Examples
+
+### Basic Connection
+
+```bash
+# Connect to a vCluster
+vcluster connect my-vcluster --namespace team-x
+
+# Connect with custom kubeconfig location
+vcluster connect my-vcluster -n team-x --kube-config ./my-kubeconfig
+```
+
+### Execute Commands
+
+```bash
+# Open a bash shell with vCluster context
+vcluster connect my-vcluster -n team-x -- bash
+
+# Run kubectl commands directly
+vcluster connect my-vcluster -n team-x -- kubectl get pods
+
+# Run multiple commands
+vcluster connect my-vcluster -n team-x -- sh -c "kubectl get ns && kubectl get pods -A"
+```
+
+### Background Connection
+
+```bash
+# Start port-forwarding in background
+vcluster connect my-vcluster -n team-x --background
+
+# Connect later without starting new port-forward
+vcluster connect my-vcluster -n team-x --use-existing-port-forward
+```
+
+## Flags
+
+<ParamField path="--namespace" type="string" required>
+  The Kubernetes namespace where the vCluster is running.
+</ParamField>
+
+<ParamField path="--driver" type="string" default="helm">
+  The driver to use. Options: `helm`, `platform`, `docker`.
+</ParamField>
+
+<ParamField path="--kube-config" type="string">
+  Path to kubeconfig file to update. Defaults to `$KUBECONFIG` or `~/.kube/config`.
+</ParamField>
+
+<ParamField path="--server" type="string">
+  The server to connect to. If not specified, uses port-forwarding.
+</ParamField>
+
+<ParamField path="--service-account" type="string">
+  Service account name to use for authentication.
+</ParamField>
+
+<ParamField path="--insecure" type="boolean">
+  Skip TLS certificate verification.
+</ParamField>
+
+<ParamField path="--background" type="boolean">
+  Start port-forwarding as a background process.
+</ParamField>
+
+<ParamField path="--use-existing-port-forward" type="boolean">
+  Use an existing port-forward instead of starting a new one.
+</ParamField>
+
+<ParamField path="--local-port" type="int">
+  The local port to use for port-forwarding.
+</ParamField>
+
+<ParamField path="--print" type="boolean">
+  Print the kubeconfig to stdout instead of updating the file.
+</ParamField>
+
+<ParamField path="--kube-config-context-name" type="string">
+  Custom name for the kubeconfig context.
+</ParamField>
+
+## Platform Flags
+
+<ParamField path="--project" type="string">
+  [PLATFORM] The vCluster Platform project name.
+</ParamField>
+
+## Connection Methods
+
+vCluster supports multiple connection methods:
+
+### 1. Port-Forwarding (Default)
+
+The default and most compatible method. Creates a local port-forward to the vCluster:
+
+```bash
+vcluster connect my-vcluster -n team-x
+```
+
+**Pros:**
+- Works from anywhere with kubectl access
+- No additional infrastructure needed
+- Secure (uses existing k8s authentication)
+
+**Cons:**
+- Requires active connection
+- Additional latency
+
+### 2. Direct Connection
+
+Connect directly using a LoadBalancer or Ingress:
+
+```bash
+# Get the external address
+kubectl get svc -n team-x my-vcluster -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+
+# Connect using external address
+vcluster connect my-vcluster -n team-x --server https://external-ip:443
+```
+
+**Pros:**
+- Lower latency
+- No local port-forwarding needed
+- Better for CI/CD
+
+**Cons:**
+- Requires LoadBalancer or Ingress
+- Must manage certificates
+
+### 3. Service Account Token
+
+Use a service account for non-interactive authentication:
+
+```bash
+vcluster connect my-vcluster -n team-x --service-account my-sa
+```
+
+## Complete Examples
+
+### CI/CD Pipeline
+
+```bash ci-pipeline.sh
+#!/bin/bash
+# Connect to vCluster in CI/CD
+vcluster connect test-cluster -n ci \
+  --server https://vcluster.example.com \
+  --service-account ci-bot \
+  --kube-config /tmp/kubeconfig
+
+export KUBECONFIG=/tmp/kubeconfig
+
+# Run tests
+kubectl apply -f test-deployment.yaml
+kubectl wait --for=condition=ready pod -l app=test --timeout=60s
+kubectl run test-runner --image=test:latest --rm -it --restart=Never
+```
+
+### Development Workflow
+
+```bash
+# Connect in background
+vcluster connect dev-cluster -n development --background
+
+# Your context is now set to the vCluster
+kubectl get ns
+kubectl create deployment nginx --image=nginx
+
+# When done, disconnect
+vcluster disconnect
+```
+
+### Print Kubeconfig Only
+
+```bash
+# Get kubeconfig without updating local file
+vcluster connect my-vcluster -n team-x --print > vcluster-kubeconfig.yaml
+
+# Use it explicitly
+kubectl --kubeconfig vcluster-kubeconfig.yaml get pods
+```
+
+## Output
+
+Successful connection output:
+
+```
+info   Starting port-forwarding at 12345
+info   Successfully updated kube config
+info   Switched active kube context to vcluster_my-vcluster_team-x_kind-kind
+```
+
+Verify connection:
+
+```bash
+# Check current context
+kubectl config current-context
+# Output: vcluster_my-vcluster_team-x_kind-kind
+
+# Test connectivity
+kubectl get ns
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Port already in use">
+    If the local port is already in use:
+
+    ```bash
+    # Use a different port
+    vcluster connect my-vcluster -n team-x --local-port 10443
+    ```
+  </Accordion>
+
+  <Accordion title="Connection timeout">
+    Check if the vCluster is running:
+
+    ```bash
+    kubectl get pods -n team-x
+    kubectl logs -n team-x my-vcluster-0
+    ```
+  </Accordion>
+
+  <Accordion title="Certificate errors">
+    For certificate issues with direct connections:
+
+    ```bash
+    # Skip certificate verification (not recommended for production)
+    vcluster connect my-vcluster -n team-x --server https://... --insecure
+    ```
+  </Accordion>
+
+  <Accordion title="Context not switching">
+    Manually switch context:
+
+    ```bash
+    kubectl config use-context vcluster_my-vcluster_team-x_kind-kind
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Disconnecting
+
+To disconnect from a vCluster and return to your previous context:
+
+```bash
+# Switch back to previous context
+kubectl config use-context <previous-context>
+
+# Or use vcluster list to see all contexts
+vcluster list
+```
+
+## See Also
+
+- [vcluster create](/cli/create) - Create a new vCluster
+- [vcluster list](/cli/list) - List all vClusters

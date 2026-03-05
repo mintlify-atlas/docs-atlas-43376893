@@ -1,0 +1,650 @@
+---
+title: Storage
+description: Configure persistent storage for vCluster and workloads
+---
+
+This guide covers storage configuration for vCluster, including persistent volumes for the control plane, etcd data storage, and workload storage.
+
+## Storage Architecture
+
+vCluster storage involves multiple layers:
+
+- **Control plane storage**: Persistent data for the vCluster control plane
+- **etcd storage**: Database backing store for Kubernetes state
+- **Workload storage**: PersistentVolumeClaims created by applications in the virtual cluster
+- **Host cluster storage**: Underlying storage classes and provisioners
+
+## Control Plane Storage
+
+### Basic Persistent Volume Configuration
+
+Configure persistent storage for the vCluster control plane:
+
+```yaml
+controlPlane:
+  statefulSet:
+    persistence:
+      volumeClaim:
+        # Enable persistent storage
+        enabled: auto  # auto, true, or false
+        
+        # Size of the persistent volume
+        size: 5Gi
+        
+        # Storage class to use
+        storageClass: ""  # Empty means default storage class
+        
+        # Retention policy
+        retentionPolicy: Retain  # Retain or Delete
+        
+        # Access modes
+        accessModes:
+          - ReadWriteOnce
+```
+
+<Note>
+  When `enabled: auto`, vCluster automatically determines if persistence is needed based on the selected distro and backing store.
+</Note>
+
+### Storage Class Selection
+
+Choose appropriate storage class based on your environment:
+
+```yaml
+# AWS EBS (gp3)
+controlPlane:
+  statefulSet:
+    persistence:
+      volumeClaim:
+        storageClass: "ebs-gp3"
+        size: 10Gi
+
+# GCP Persistent Disk (SSD)
+controlPlane:
+  statefulSet:
+    persistence:
+      volumeClaim:
+        storageClass: "pd-ssd"
+        size: 10Gi
+
+# Azure Managed Premium SSD  
+controlPlane:
+  statefulSet:
+    persistence:
+      volumeClaim:
+        storageClass: "managed-premium"
+        size: 10Gi
+
+# Local SSD (high performance)
+controlPlane:
+  statefulSet:
+    persistence:
+      volumeClaim:
+        storageClass: "local-ssd"
+        size: 50Gi
+```
+
+### Retention Policies
+
+Control what happens to PVCs after vCluster deletion:
+
+```yaml
+controlPlane:
+  statefulSet:
+    persistence:
+      volumeClaim:
+        # Retain: PVC persists after vCluster deletion (default)
+        retentionPolicy: Retain
+        
+        # Delete: PVC is deleted with vCluster
+        # retentionPolicy: Delete
+```
+
+<Warning>
+  Use `Retain` for production to prevent accidental data loss. The PVC and PV must be manually deleted after uninstalling vCluster.
+</Warning>
+
+### Custom Volume Configuration
+
+Use custom volume claim templates:
+
+```yaml
+controlPlane:
+  statefulSet:
+    persistence:
+      # Disable default volume claim
+      volumeClaim:
+        enabled: false
+      
+      # Custom volume claim templates
+      volumeClaimTemplates:
+        - metadata:
+            name: data
+            labels:
+              app: vcluster
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            storageClassName: fast-ssd
+            resources:
+              requests:
+                storage: 20Gi
+```
+
+### Additional Volumes
+
+Mount additional volumes to the control plane:
+
+```yaml
+controlPlane:
+  statefulSet:
+    persistence:
+      # Add extra volumes
+      addVolumes:
+        - name: config-volume
+          configMap:
+            name: my-config
+        - name: secret-volume
+          secret:
+            secretName: my-secret
+        - name: cache-volume
+          emptyDir:
+            sizeLimit: 1Gi
+      
+      # Mount the volumes
+      addVolumeMounts:
+        - name: config-volume
+          mountPath: /etc/config
+          readOnly: true
+        - name: secret-volume
+          mountPath: /etc/secrets
+          readOnly: true
+        - name: cache-volume
+          mountPath: /tmp/cache
+```
+
+## etcd Storage Configuration
+
+### Deployed etcd Storage
+
+Configure persistent storage for deployed etcd:
+
+```yaml
+controlPlane:
+  backingStore:
+    etcd:
+      deploy:
+        enabled: true
+        statefulSet:
+          persistence:
+            volumeClaim:
+              enabled: true
+              
+              # Size requirements based on cluster size:
+              # Small cluster (< 100 pods): 5-10Gi
+              # Medium cluster (100-500 pods): 10-20Gi  
+              # Large cluster (> 500 pods): 20-50Gi
+              size: 10Gi
+              
+              # Use fast SSD storage for etcd
+              storageClass: "fast-ssd"
+              
+              retentionPolicy: Retain
+              
+              accessModes:
+                - ReadWriteOnce
+```
+
+<Warning>
+  **Critical**: Always use SSD-backed storage for etcd. Using HDD storage will cause severe performance issues and cluster instability.
+</Warning>
+
+### etcd Storage Best Practices
+
+**Performance Requirements**:
+- **IOPS**: Minimum 3000 IOPS for production
+- **Latency**: < 10ms for 99th percentile fsync
+- **Throughput**: 50+ MB/s sequential write
+
+**Storage Class Examples**:
+
+```yaml
+# AWS - io2 for high IOPS
+controlPlane:
+  backingStore:
+    etcd:
+      deploy:
+        statefulSet:
+          persistence:
+            volumeClaim:
+              storageClass: "ebs-io2"
+              size: 10Gi
+              # Configure IOPS via storage class parameters
+
+# GCP - pd-ssd for consistent performance
+controlPlane:
+  backingStore:
+    etcd:
+      deploy:
+        statefulSet:
+          persistence:
+            volumeClaim:
+              storageClass: "pd-ssd"
+              size: 20Gi
+
+# On-premises - local NVMe
+controlPlane:
+  backingStore:
+    etcd:
+      deploy:
+        statefulSet:
+          persistence:
+            volumeClaim:
+              storageClass: "local-nvme"
+              size: 50Gi
+```
+
+### etcd Volume Sizing
+
+Size etcd volumes based on cluster scale:
+
+```yaml
+# Development/Testing
+size: 5Gi    # Up to 50 pods
+
+# Small Production  
+size: 10Gi   # 50-200 pods
+
+# Medium Production
+size: 20Gi   # 200-500 pods
+
+# Large Production
+size: 50Gi   # 500+ pods
+```
+
+Monitor etcd database size:
+```bash
+kubectl exec -n vcluster-my-vcluster my-vcluster-etcd-0 -- sh -c \
+  "ETCDCTL_API=3 etcdctl \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/etcd/pki/ca.crt \
+  --cert=/etc/etcd/pki/server.crt \
+  --key=/etc/etcd/pki/server.key \
+  endpoint status -w table"
+```
+
+## Workload Storage
+
+### PersistentVolumeClaim Syncing
+
+Enable PVC synchronization from virtual to host cluster:
+
+```yaml
+sync:
+  toHost:
+    persistentVolumeClaims:
+      enabled: true
+```
+
+When enabled, PVCs created in the virtual cluster are synced to the host cluster and provisioned by the host's storage classes.
+
+### Storage Class Syncing
+
+Sync storage classes from host to virtual cluster:
+
+```yaml
+sync:
+  fromHost:
+    storageClasses:
+      enabled: auto  # Auto-enables with virtual scheduler
+```
+
+This makes host cluster storage classes available in the virtual cluster:
+
+```bash
+# In virtual cluster
+kubectl get storageclass
+
+NAME                 PROVISIONER             AGE
+standard (default)   kubernetes.io/aws-ebs   5m
+fast-ssd            kubernetes.io/aws-ebs   5m
+```
+
+### Example Workload PVC
+
+Create a PVC in the virtual cluster:
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: my-app-data
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 10Gi
+```
+
+This PVC is automatically synced to the host cluster and bound to a PV provisioned by the host's storage class.
+
+### StatefulSet with Storage
+
+Example StatefulSet with persistent storage:
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: database
+spec:
+  serviceName: database
+  replicas: 3
+  selector:
+    matchLabels:
+      app: database
+  template:
+    metadata:
+      labels:
+        app: database
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 20Gi
+```
+
+## Volume Snapshots
+
+### Enable Volume Snapshots
+
+Support for volume snapshots and backups:
+
+```yaml
+sync:
+  toHost:
+    # Sync VolumeSnapshots
+    volumeSnapshots:
+      enabled: true
+    
+    # Sync VolumeSnapshotContents
+    volumeSnapshotContents:
+      enabled: true
+
+sync:
+  fromHost:
+    # Sync VolumeSnapshotClasses
+    volumeSnapshotClasses:
+      enabled: true
+```
+
+### Enable Volume Snapshot RBAC
+
+```yaml
+rbac:
+  enableVolumeSnapshotRules:
+    enabled: true  # Auto-enabled when volume snapshots are enabled
+```
+
+### Deploy CSI Snapshot Controller
+
+```yaml
+deploy:
+  volumeSnapshotController:
+    enabled: true
+```
+
+### Create Volume Snapshot
+
+Example snapshot in virtual cluster:
+
+```yaml
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: my-app-snapshot
+  namespace: default
+spec:
+  volumeSnapshotClassName: csi-snapclass
+  source:
+    persistentVolumeClaimName: my-app-data
+```
+
+## Local Path Provisioner
+
+For development or bare-metal environments, use the local path provisioner:
+
+```yaml
+deploy:
+  localPathProvisioner:
+    enabled: true
+```
+
+This deploys a simple provisioner that creates volumes using local paths on nodes.
+
+<Note>
+  Local path provisioner is suitable for development but not recommended for production as volumes are not replicated.
+</Note>
+
+## Storage Performance Optimization
+
+### Use Fast Storage for etcd
+
+```yaml
+controlPlane:
+  backingStore:
+    etcd:
+      deploy:
+        statefulSet:
+          # Use io2 or pd-ssd storage class
+          persistence:
+            volumeClaim:
+              storageClass: "premium-ssd"
+```
+
+### Enable Storage Class Parameters
+
+Optimize storage class for your workload:
+
+```yaml
+# Example AWS storage class with provisioned IOPS
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-etcd
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: io2
+  iopsPerGB: "100"
+  fsType: ext4
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+```
+
+### Monitor Storage Performance
+
+Check etcd performance metrics:
+
+```bash
+# etcd disk fsync duration
+kubectl exec -n vcluster-my-vcluster my-vcluster-etcd-0 -- sh -c \
+  "ETCDCTL_API=3 etcdctl \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/etcd/pki/ca.crt \
+  --cert=/etc/etcd/pki/server.crt \
+  --key=/etc/etcd/pki/server.key \
+  endpoint status -w json" | jq '.[] | .Status.raftAppliedIndex'
+```
+
+## Backup and Restore
+
+### etcd Backup Strategy
+
+<Steps>
+  <Step title="Create Regular Snapshots">
+    Schedule regular etcd snapshots:
+    
+    ```bash
+    kubectl exec -n vcluster-my-vcluster my-vcluster-etcd-0 -- sh -c \
+      "ETCDCTL_API=3 etcdctl \
+      --endpoints=https://127.0.0.1:2379 \
+      --cacert=/etc/etcd/pki/ca.crt \
+      --cert=/etc/etcd/pki/server.crt \
+      --key=/etc/etcd/pki/server.key \
+      snapshot save /tmp/snapshot-$(date +%Y%m%d-%H%M%S).db"
+    ```
+  </Step>
+
+  <Step title="Store Snapshots Externally">
+    Copy snapshots to external storage:
+    
+    ```bash
+    kubectl cp vcluster-my-vcluster/my-vcluster-etcd-0:/tmp/snapshot.db \
+      ./backups/snapshot-$(date +%Y%m%d).db
+    
+    # Upload to S3, GCS, or Azure Blob Storage
+    aws s3 cp ./backups/snapshot-$(date +%Y%m%d).db \
+      s3://my-backups/vcluster/
+    ```
+  </Step>
+
+  <Step title="Test Restore Procedure">
+    Regularly test restore procedures to ensure backups are valid.
+  </Step>
+</Steps>
+
+### Volume Snapshot Backups
+
+Use volume snapshots for point-in-time recovery:
+
+```yaml
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: etcd-backup-daily
+  namespace: vcluster-my-vcluster
+spec:
+  volumeSnapshotClassName: csi-snapclass
+  source:
+    persistentVolumeClaimName: data-my-vcluster-etcd-0
+```
+
+## Storage Troubleshooting
+
+### PVC Stuck in Pending
+
+**Problem**: PersistentVolumeClaim remains in Pending state.
+
+**Debug steps**:
+```bash
+# Check PVC status
+kubectl describe pvc my-pvc
+
+# Check events
+kubectl get events --field-selector involvedObject.name=my-pvc
+
+# Check storage class exists
+kubectl get storageclass
+
+# Check provisioner logs
+kubectl logs -n kube-system -l app=ebs-csi-controller
+```
+
+**Common causes**:
+- Storage class doesn't exist
+- Insufficient quota or capacity
+- Provisioner not running
+- Node selector constraints not met
+
+### etcd Performance Issues
+
+**Problem**: Slow etcd operations affecting cluster performance.
+
+**Debug steps**:
+```bash
+# Check etcd metrics
+kubectl exec -n vcluster-my-vcluster my-vcluster-etcd-0 -- sh -c \
+  "ETCDCTL_API=3 etcdctl \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/etcd/pki/ca.crt \
+  --cert=/etc/etcd/pki/server.crt \
+  --key=/etc/etcd/pki/server.key \
+  check perf"
+```
+
+**Solutions**:
+- Use SSD storage instead of HDD
+- Increase IOPS for the storage volume
+- Defragment etcd database
+- Compact etcd history
+
+### Volume Mounting Failures
+
+**Problem**: Pod can't mount volume.
+
+**Debug steps**:
+```bash
+# Check pod events
+kubectl describe pod my-pod
+
+# Check PV binding
+kubectl get pv,pvc
+
+# Check node where pod is scheduled
+kubectl get pod my-pod -o wide
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Always Use Persistent Storage in Production">
+    Never run production vClusters without persistent storage.
+  </Step>
+
+  <Step title="Use SSD for etcd">
+    Always use SSD-backed storage for etcd, never HDD.
+  </Step>
+
+  <Step title="Set Retention Policies">
+    Use `Retain` policy for production to prevent accidental data loss.
+  </Step>
+
+  <Step title="Monitor Storage Usage">
+    Set up alerts for storage usage reaching 80% capacity.
+  </Step>
+
+  <Step title="Regular Backups">
+    Implement automated backup strategy for etcd data.
+  </Step>
+
+  <Step title="Test Restore Procedures">
+    Regularly test backup and restore to ensure they work.
+  </Step>
+
+  <Step title="Size Appropriately">
+    Start with recommended sizes and scale based on actual usage.
+  </Step>
+</Steps>
+
+## Next Steps
+
+- [High Availability](/deployment/high-availability) - Configure HA with proper storage
+- [Configuration](/deployment/configuration) - Explore all configuration options
+- [Helm Installation](/deployment/helm-installation) - Installation procedures

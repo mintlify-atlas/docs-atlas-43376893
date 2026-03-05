@@ -1,0 +1,580 @@
+---
+title: Virtual Clusters Explained
+description: Deep dive into what virtual clusters are and how vCluster implements them
+---
+
+A virtual cluster is a fully functional Kubernetes cluster that runs inside a namespace of a host Kubernetes cluster (or standalone on bare metal/VMs). It provides complete API isolation with its own API server, control plane, and data store, while sharing underlying infrastructure in various ways depending on the deployment architecture.
+
+## What Makes a Cluster "Virtual"?
+
+A virtual cluster appears to be a complete, independent Kubernetes cluster from the user's perspective:
+
+<Check>Complete Kubernetes API server</Check>
+<Check>Own set of nodes (real or virtual)</Check>
+<Check>Full RBAC and authentication</Check>
+<Check>Own namespace hierarchy</Check>
+<Check>Independent CRD installation</Check>
+<Check>Isolated network policies and storage</Check>
+
+However, the actual workload execution and infrastructure can be shared with a host cluster or run on dedicated infrastructure.
+
+## Core Architecture
+
+### Control Plane Components
+
+Every vCluster includes these essential components:
+
+```
+┌─────────────────────────────────────────────┐
+│         Virtual Cluster Control Plane       │
+├─────────────────────────────────────────────┤
+│                                             │
+│  ┌──────────────┐      ┌───────────────┐   │
+│  │  API Server  │      │ Data Store    │   │
+│  │              │◄────►│ (etcd/SQL)    │   │
+│  └──────┬───────┘      └───────────────┘   │
+│         │                                   │
+│         │              ┌───────────────┐   │
+│         └─────────────►│    Syncer     │   │
+│                        │               │   │
+│                        └───────┬───────┘   │
+│                                │           │
+└────────────────────────────────┼───────────┘
+                                 │
+                                 ▼
+                    Infrastructure Layer
+              (Shared/Dedicated/Private/None)
+```
+
+#### API Server
+
+The API server is the heart of the virtual cluster:
+
+- **Full Kubernetes API**: Supports all Kubernetes APIs (v1.19+)
+- **Authentication**: Manages its own users, service accounts, and tokens
+- **Authorization**: Independent RBAC policies
+- **Admission Control**: Can run webhooks and policy engines
+- **API Extensions**: Supports CRDs and API aggregation
+
+<CodeGroup>
+```yaml Shared/Dedicated Nodes
+controlPlane:
+  distro:
+    k8s:
+      enabled: false  # Uses lightweight K3s by default
+```
+
+```yaml Full Kubernetes Distro
+controlPlane:
+  distro:
+    k8s:
+      enabled: true
+      version: "v1.35.0"
+      scheduler:
+        enabled: true  # Optional virtual scheduler
+```
+</CodeGroup>
+
+#### Data Store
+
+The data store persists the virtual cluster's state. Multiple options are available:
+
+<Tabs>
+  <Tab title="Embedded SQLite (Default)">
+    ```yaml
+    controlPlane:
+      backingStore:
+        database:
+          embedded:
+            enabled: true
+    ```
+
+    **Pros:**
+    - Zero configuration
+    - No external dependencies
+    - Smallest resource footprint
+    - Fast for single-replica setups
+
+    **Cons:**
+    - Single replica only (no HA)
+    - Not suitable for production at scale
+  </Tab>
+
+  <Tab title="Embedded etcd">
+    ```yaml
+    controlPlane:
+      backingStore:
+        etcd:
+          embedded:
+            enabled: true
+      statefulSet:
+        highAvailability:
+          replicas: 3  # For HA
+    ```
+
+    **Pros:**
+    - High availability support
+    - Native Kubernetes backing store
+    - Better performance at scale
+
+    **Cons:**
+    - Higher resource usage
+    - More complex setup
+  </Tab>
+
+  <Tab title="External Database">
+    ```yaml
+    controlPlane:
+      backingStore:
+        database:
+          external:
+            enabled: true
+            dataSource: "postgres://user:pass@host:5432/vcluster"
+    ```
+
+    **Pros:**
+    - Managed database services (RDS, Cloud SQL)
+    - Simplified backup and recovery
+    - Separate lifecycle from vCluster
+
+    **Cons:**
+    - External dependency
+    - Network latency
+    - Additional cost
+  </Tab>
+
+  <Tab title="External etcd">
+    ```yaml
+    controlPlane:
+      backingStore:
+        etcd:
+          deploy:
+            enabled: true
+            statefulSet:
+              highAvailability:
+                replicas: 3
+    ```
+
+    **Pros:**
+    - Full control over etcd cluster
+    - Can be shared across vClusters
+    - Better for large-scale deployments
+
+    **Cons:**
+    - Most complex setup
+    - Requires etcd expertise
+  </Tab>
+</Tabs>
+
+#### Syncer
+
+The syncer is vCluster's unique component that bridges the virtual and physical worlds:
+
+**Key Responsibilities:**
+
+1. **Resource Translation**: Converts virtual resources to physical ones
+   ```
+   Virtual: default/nginx
+   Physical: vcluster-my-vcluster-x-default-nginx-abc123
+   ```
+
+2. **Bidirectional Sync**: Watches both virtual and physical resources
+   - Virtual → Physical: Workload resources (pods, services, PVCs)
+   - Physical → Virtual: Infrastructure resources (nodes, storage classes)
+
+3. **Status Updates**: Syncs status from physical back to virtual resources
+
+4. **Resource Mapping**: Maintains mappings between virtual and physical resources
+
+<Note>
+  The syncer implementation varies significantly between architectures. In standalone mode, it manages resources directly instead of syncing to a host cluster.
+</Note>
+
+### Node Representation
+
+vCluster handles nodes differently based on the architecture:
+
+<Tabs>
+  <Tab title="Fake Nodes (Shared)">
+    Virtual clusters show fake nodes that don't correspond to real infrastructure:
+
+    ```go
+    // pkg/controllers/resources/nodes/fake_syncer.go
+    // Creates pseudo nodes for the virtual cluster
+    FakeNodesVersion = "v1.19.1"
+    ```
+
+    **Characteristics:**
+    - Created automatically based on pod scheduling
+    - Show aggregated resources from host cluster
+    - Cannot be directly manipulated by users
+    - No kubelet endpoint (unless proxy enabled)
+
+    ```bash
+    kubectl get nodes
+    # NAME              STATUS   ROLES    AGE   VERSION
+    # fake-node-1      Ready    <none>   10m   v1.19.1
+    # fake-node-2      Ready    <none>   10m   v1.19.1
+    ```
+  </Tab>
+
+  <Tab title="Synced Nodes (Dedicated)">
+    Real host nodes are synced to the virtual cluster:
+
+    ```yaml
+    sync:
+      fromHost:
+        nodes:
+          enabled: true
+          selector:
+            labels:
+              tenant: my-team
+    ```
+
+    **Characteristics:**
+    - Real host nodes visible in virtual cluster
+    - Can be labeled and tainted in virtual cluster
+    - Scheduling decisions respect node selectors
+    - Kubelet metrics available via proxy
+  </Tab>
+
+  <Tab title="Private Nodes">
+    External nodes join the virtual cluster directly:
+
+    ```yaml
+    privateNodes:
+      enabled: true
+    sync:
+      fromHost:
+        nodes:
+          enabled: false  # No host nodes
+    ```
+
+    **Characteristics:**
+    - Real nodes with full kubelet
+    - Own CNI and CSI drivers
+    - Complete node lifecycle management
+    - No host cluster involvement
+  </Tab>
+
+  <Tab title="Standalone Nodes">
+    Nodes join the vCluster control plane directly:
+
+    ```yaml
+    controlPlane:
+      standalone:
+        enabled: true
+        joinNode:
+          enabled: true
+    ```
+
+    **Characteristics:**
+    - First-class cluster nodes
+    - Control plane can also be a node
+    - Standard Kubernetes node management
+    - No virtual/physical distinction
+  </Tab>
+</Tabs>
+
+## Resource Lifecycle
+
+Understanding how resources flow through vCluster:
+
+<Steps>
+  <Step title="Resource Creation">
+    User creates a pod in the virtual cluster:
+
+    ```bash
+    kubectl create deployment nginx --image=nginx
+    ```
+
+    The API server validates, admits, and stores the deployment in the data store.
+  </Step>
+
+  <Step title="Controller Processing">
+    The deployment controller (running in virtual cluster) creates a ReplicaSet, which creates a Pod.
+  </Step>
+
+  <Step title="Syncer Translation">
+    The syncer watches the pod creation and translates it:
+
+    ```yaml
+    # Virtual Cluster
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: nginx-abc123
+      namespace: default
+    
+    # Physical Cluster (if applicable)
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: nginx-abc123-x-default-x-my-vcluster
+      namespace: vcluster-my-vcluster
+      labels:
+        vcluster.loft.sh/namespace: default
+        vcluster.loft.sh/managed-by: my-vcluster
+    ```
+  </Step>
+
+  <Step title="Scheduling & Execution">
+    Depending on architecture:
+    - **Shared/Dedicated**: Host scheduler places pod on host nodes
+    - **Private/Standalone**: Virtual scheduler (if enabled) or default scheduler places pod on virtual nodes
+  </Step>
+
+  <Step title="Status Synchronization">
+    The syncer watches the physical pod status and updates the virtual pod:
+
+    ```yaml
+    status:
+      phase: Running
+      podIP: 10.244.1.5
+      conditions:
+        - type: Ready
+          status: "True"
+    ```
+  </Step>
+</Steps>
+
+## Namespace Behavior
+
+Virtual clusters provide complete namespace isolation:
+
+### Virtual Cluster Perspective
+
+Users see a normal Kubernetes cluster with full namespace control:
+
+```bash
+kubectl create namespace team-a
+kubectl create namespace team-b
+kubectl get namespaces
+# NAME              STATUS   AGE
+# default           Active   10m
+# kube-system       Active   10m
+# team-a            Active   1m
+# team-b            Active   1m
+```
+
+### Host Cluster Perspective (Shared/Dedicated)
+
+Namespaces in the virtual cluster don't create host namespaces by default. All resources go into the vCluster's host namespace:
+
+```bash
+# On host cluster
+kubectl get pods -n vcluster-my-vcluster
+# NAME                                              READY   STATUS
+# nginx-abc123-x-default-x-my-vcluster             1/1     Running
+# app-xyz789-x-team-a-x-my-vcluster                1/1     Running
+```
+
+<Tip>
+  You can enable namespace syncing to create real host namespaces:
+
+  ```yaml
+  sync:
+    toHost:
+      namespaces:
+        enabled: true
+  ```
+
+  This is useful for integrating with host-level policies and tools.
+</Tip>
+
+## DNS and Service Discovery
+
+Each virtual cluster has its own DNS domain:
+
+```yaml
+networking:
+  advanced:
+    clusterDomain: "cluster.local"  # Default
+```
+
+### Service DNS
+
+Services are resolvable within the virtual cluster:
+
+```bash
+# Create service in default namespace
+kubectl expose deployment nginx --port=80
+
+# Accessible at:
+http://nginx.default.svc.cluster.local
+```
+
+### CoreDNS Configuration
+
+vCluster deploys CoreDNS for virtual cluster DNS:
+
+```yaml
+controlPlane:
+  coredns:
+    enabled: true
+    embedded: false  # Run as separate deployment
+```
+
+<CodeGroup>
+```yaml Standard CoreDNS
+controlPlane:
+  coredns:
+    enabled: true
+    deployment:
+      replicas: 1
+      resources:
+        requests:
+          cpu: 20m
+          memory: 64Mi
+```
+
+```yaml Embedded CoreDNS (Pro)
+controlPlane:
+  coredns:
+    enabled: true
+    embedded: true  # Runs in control plane pod
+```
+</CodeGroup>
+
+## Networking Models
+
+Networking varies by architecture:
+
+### Shared/Dedicated Nodes
+
+- **Pod IPs**: From host cluster's pod CIDR
+- **Service IPs**: Virtual cluster's service CIDR (default: 10.96.0.0/12)
+- **Ingress**: Synced to host cluster or use LoadBalancer
+
+```yaml
+networking:
+  services:
+    cidr: "10.96.0.0/12"  # Virtual service CIDR
+```
+
+### Private/Standalone Nodes
+
+- **Pod IPs**: Own pod CIDR with own CNI
+- **Service IPs**: Own service CIDR
+- **Ingress**: Native to virtual cluster
+
+```yaml
+networking:
+  podCIDR: "10.244.0.0/16"  # Virtual pod CIDR
+controlPlane:
+  service:
+    spec:
+      type: NodePort  # Expose control plane
+```
+
+## Storage Integration
+
+### Shared/Dedicated Modes
+
+Storage classes are synced from the host cluster:
+
+```yaml
+sync:
+  fromHost:
+    storageClasses:
+      enabled: auto  # Enabled when virtual scheduler is off
+```
+
+PVCs in the virtual cluster create PVCs in the host cluster.
+
+### Private/Standalone Modes
+
+Storage is fully independent:
+
+```yaml
+deploy:
+  localPathProvisioner:
+    enabled: true  # Provides local storage
+```
+
+Install any CSI driver directly in the virtual cluster.
+
+## High Availability
+
+Run multiple control plane replicas for production:
+
+```yaml
+controlPlane:
+  backingStore:
+    etcd:
+      embedded:
+        enabled: true
+  statefulSet:
+    highAvailability:
+      replicas: 3
+      leaseDuration: 60
+      renewDeadline: 40
+      retryPeriod: 15
+```
+
+**Leader Election**: Only one replica is active; others standby for failover.
+
+## Performance Tuning
+
+### Resource Requests
+
+Adjust based on cluster size:
+
+```yaml
+controlPlane:
+  statefulSet:
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        memory: 4Gi
+        ephemeral-storage: 10Gi
+```
+
+### Persistence
+
+Use appropriate storage for the backing store:
+
+```yaml
+controlPlane:
+  statefulSet:
+    persistence:
+      volumeClaim:
+        enabled: true
+        size: 5Gi
+        storageClass: "fast-ssd"
+```
+
+## Limitations
+
+Virtual clusters have some constraints compared to physical clusters:
+
+<Warning>
+  **Cannot modify host cluster resources**: Virtual cluster users cannot access or modify resources outside their virtual cluster (unless explicitly granted permissions).
+</Warning>
+
+<Warning>
+  **Kernel-level isolation**: In shared/dedicated modes, workloads share the host kernel. Use private/standalone for stronger isolation.
+</Warning>
+
+<Info>
+  **Node-level features**: Features requiring direct node access (e.g., DaemonSets on host nodes, privileged containers in shared mode) have limitations.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Shared Nodes" icon="layer-group" href="/architecture/shared-nodes">
+    Learn about the highest-density deployment mode.
+  </Card>
+  <Card title="Dedicated Nodes" icon="server" href="/architecture/dedicated-nodes">
+    Explore compute isolation with labeled node pools.
+  </Card>
+  <Card title="Private Nodes" icon="shield" href="/architecture/private-nodes">
+    Discover full CNI/CSI isolation for compliance.
+  </Card>
+  <Card title="Standalone Mode" icon="microchip" href="/architecture/standalone-mode">
+    Run vCluster without a host cluster.
+  </Card>
+</CardGroup>

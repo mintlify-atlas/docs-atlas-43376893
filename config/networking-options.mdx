@@ -1,0 +1,332 @@
+---
+title: Networking Options
+description: Configure networking, DNS, and service replication for vCluster
+---
+
+Networking configuration controls how the virtual cluster communicates with the host cluster and external services, including DNS resolution, service replication, and network policies.
+
+## Pod CIDR
+
+<ParamField path="networking.podCIDR" type="string" default="10.244.0.0/16">
+  Pod CIDR for the virtual cluster. This should only be set when `privateNodes.enabled` is true.
+</ParamField>
+
+## Service Replication
+
+<ParamField path="networking.replicateServices" type="object">
+  Configure service replication between virtual and host clusters.
+
+  <Expandable title="properties">
+    <ParamField path="toHost" type="array">
+      Services to sync from virtual cluster to host cluster.
+      
+      ```yaml
+      toHost:
+        - from: my-namespace/my-service
+          to: different-namespace/my-service
+      ```
+      
+      This requires additional RBAC permissions if syncing to a different namespace.
+    </ParamField>
+
+    <ParamField path="fromHost" type="array">
+      Services to sync from host cluster to virtual cluster.
+      
+      ```yaml
+      fromHost:
+        - from: host-namespace/database
+          to: default/database
+      ```
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## DNS Configuration
+
+<ParamField path="networking.resolveDNS" type="array" pro>
+  Define extra DNS rules (PRO feature). Only works with embedded CoreDNS.
+
+  ```yaml
+  resolveDNS:
+    - hostname: "myservice.com"
+      service: "my-namespace/my-service"
+      target:
+        namespace: "my-namespace"
+        service: "my-service"
+    - hostname: "*.mycompany.internal"
+      target:
+        hostname: "10.0.0.1"
+  ```
+</ParamField>
+
+<ParamField path="networking.advanced" type="object">
+  Advanced networking options.
+
+  <Expandable title="properties">
+    <ParamField path="clusterDomain" type="string" default="cluster.local">
+      Kubernetes cluster domain to use within the virtual cluster.
+    </ParamField>
+
+    <ParamField path="fallbackHostCluster" type="boolean" default="false">
+      Allow DNS fallback to the host cluster. Enables reaching host services without modification.
+      
+      Example: `my-service.my-namespace` from within vCluster will resolve to the host cluster service.
+    </ParamField>
+
+    <ParamField path="proxyKubelets" type="object">
+      Rewrite kubelet metrics and stats for monitoring applications.
+      
+      <Expandable title="properties">
+        <ParamField path="byHostname" type="boolean" default="true">
+          Add a special vCluster hostname to nodes for reachability. May not work with all applications.
+        </ParamField>
+        
+        <ParamField path="byIP" type="boolean" default="true">
+          Create a separate service in the host cluster for every node to route traffic.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Control Plane Proxy
+
+<ParamField path="controlPlane.proxy" type="object">
+  Configure the vCluster control plane proxy for authentication and request interception.
+
+  <Expandable title="properties">
+    <ParamField path="bindAddress" type="string" default="0.0.0.0">
+      Address where vCluster exposes the proxy.
+    </ParamField>
+
+    <ParamField path="port" type="number" default="8443">
+      Port where vCluster exposes the proxy. Changing port is currently not supported.
+    </ParamField>
+
+    <ParamField path="extraSANs" type="array">
+      Extra hostnames to sign the vCluster proxy certificate for.
+      
+      ```yaml
+      extraSANs:
+        - "vcluster.example.com"
+        - "*.vcluster.example.com"
+      ```
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Control Plane Service
+
+<ParamField path="controlPlane.service" type="object">
+  vCluster control plane service configuration.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable the control plane service.
+    </ParamField>
+
+    <ParamField path="spec.type" type="string" default="ClusterIP">
+      Service type. Options: `ClusterIP`, `NodePort`, `LoadBalancer`.
+    </ParamField>
+
+    <ParamField path="kubeletNodePort" type="number" default="0">
+      Node port where the fake kubelet is exposed (for NodePort service).
+    </ParamField>
+
+    <ParamField path="httpsNodePort" type="number" default="0">
+      Node port where HTTPS is exposed (for NodePort service).
+    </ParamField>
+
+    <ParamField path="annotations" type="object">
+      Service annotations.
+    </ParamField>
+
+    <ParamField path="labels" type="object">
+      Service labels.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Control Plane Ingress
+
+<ParamField path="controlPlane.ingress" type="object">
+  vCluster control plane ingress configuration.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable ingress for the control plane.
+    </ParamField>
+
+    <ParamField path="host" type="string" default="my-host.com">
+      Hostname where vCluster will be reachable.
+    </ParamField>
+
+    <ParamField path="pathType" type="string" default="ImplementationSpecific">
+      Path type for the ingress.
+    </ParamField>
+
+    <ParamField path="annotations" type="object">
+      Ingress annotations. Default includes nginx ingress SSL passthrough annotations.
+      
+      ```yaml
+      annotations:
+        nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+        nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+        nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      ```
+    </ParamField>
+
+    <ParamField path="spec.tls" type="array">
+      TLS configuration for ingress.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Network Policies
+
+See [RBAC Configuration](/config/rbac-configuration) for network policy configuration.
+
+## Example: LoadBalancer Service
+
+```yaml
+controlPlane:
+  service:
+    enabled: true
+    spec:
+      type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+```
+
+## Example: Ingress with TLS
+
+```yaml
+controlPlane:
+  ingress:
+    enabled: true
+    host: vcluster.example.com
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+      nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+    spec:
+      tls:
+        - hosts:
+            - vcluster.example.com
+          secretName: vcluster-tls
+```
+
+## Example: Service Replication
+
+```yaml
+networking:
+  replicateServices:
+    # Expose virtual cluster service to host
+    toHost:
+      - from: default/webapp
+        to: vcluster-ns/webapp
+    
+    # Make host services available in vCluster
+    fromHost:
+      - from: databases/postgres
+        to: default/postgres
+      - from: monitoring/prometheus
+        to: monitoring/prometheus
+```
+
+## Example: Custom DNS Resolution
+
+```yaml
+controlPlane:
+  coredns:
+    embedded: true  # Required for resolveDNS
+
+networking:
+  advanced:
+    clusterDomain: "cluster.local"
+    fallbackHostCluster: true
+  
+  resolveDNS:
+    # Resolve custom domain to service
+    - hostname: "api.myapp.internal"
+      target:
+        namespace: "default"
+        service: "api-service"
+    
+    # Resolve wildcard domain to external IP
+    - hostname: "*.external.com"
+      target:
+        hostname: "203.0.113.10"
+```
+
+## Example: Kubelet Proxy Configuration
+
+```yaml
+networking:
+  advanced:
+    proxyKubelets:
+      byHostname: true
+      byIP: true
+```
+
+## Example: Custom Certificate SANs
+
+```yaml
+controlPlane:
+  proxy:
+    bindAddress: "0.0.0.0"
+    port: 8443
+    extraSANs:
+      - "vcluster.prod.example.com"
+      - "vcluster.dev.example.com"
+      - "10.0.0.100"
+```
+
+## Use Cases
+
+### Multi-tenant Service Isolation
+
+Use service replication to expose specific services between tenants while maintaining isolation:
+
+```yaml
+networking:
+  replicateServices:
+    fromHost:
+      - from: shared-services/logging
+        to: default/logging
+      - from: shared-services/monitoring
+        to: default/monitoring
+```
+
+### External Service Access
+
+Make external services available via custom DNS:
+
+```yaml
+networking:
+  resolveDNS:
+    - hostname: "database.company.internal"
+      target:
+        hostname: "10.100.0.50"
+```
+
+### Expose vCluster Externally
+
+Use LoadBalancer or Ingress to expose the virtual cluster:
+
+```yaml
+controlPlane:
+  service:
+    spec:
+      type: LoadBalancer
+  # OR
+  ingress:
+    enabled: true
+    host: my-vcluster.example.com
+```
+
+## Related Configuration
+
+- See [Control Plane](/config/control-plane) for CoreDNS configuration
+- See [Sync Configuration](/config/sync-configuration) for service syncing
+- See [RBAC Configuration](/config/rbac-configuration) for network policies

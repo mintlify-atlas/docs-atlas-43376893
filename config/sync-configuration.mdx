@@ -1,0 +1,511 @@
+---
+title: Sync Configuration
+description: Configure resource synchronization between virtual and host clusters
+---
+
+vCluster synchronizes Kubernetes resources between the virtual cluster and the host cluster. This page describes how to configure which resources are synchronized and in which direction.
+
+## Sync Overview
+
+Resource synchronization works in two directions:
+
+- **ToHost**: Resources created in the virtual cluster that are synced to the host cluster
+- **FromHost**: Resources from the host cluster that are synced into the virtual cluster
+
+## ToHost Synchronization
+
+<ParamField path="sync.toHost" type="object">
+  Configure resources to sync from the virtual cluster to the host cluster.
+</ParamField>
+
+### Core Resources
+
+<ParamField path="sync.toHost.pods" type="object">
+  Pod synchronization configuration.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable pod syncing.
+    </ParamField>
+
+    <ParamField path="translateImage" type="object">
+      Map images to alternative images for the host cluster.
+      ```yaml
+      translateImage:
+        "my-image:latest": "registry.company.com/my-image:v1.0.0"
+      ```
+    </ParamField>
+
+    <ParamField path="enforceTolerations" type="array">
+      Add tolerations to all synced pods.
+      ```yaml
+      enforceTolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+      ```
+    </ParamField>
+
+    <ParamField path="runtimeClassName" type="string">
+      Runtime class to set for synced pods.
+    </ParamField>
+
+    <ParamField path="priorityClassName" type="string">
+      Priority class to set for synced pods.
+    </ParamField>
+
+    <ParamField path="useSecretsForSATokens" type="boolean" default="false">
+      Use secrets to save service account tokens instead of pod annotations.
+    </ParamField>
+
+    <ParamField path="hybridScheduling" type="object" pro>
+      Enable hybrid scheduling for pods (PRO feature).
+      
+      <Expandable title="properties">
+        <ParamField path="enabled" type="boolean" default="false">
+          Enable hybrid scheduling.
+        </ParamField>
+        
+        <ParamField path="hostSchedulers" type="array">
+          List of schedulers deployed on the host cluster.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="rewriteHosts" type="object">
+      Rewrite /etc/hosts for StatefulSet pods to match virtual cluster FQDN.
+      
+      <Expandable title="properties">
+        <ParamField path="enabled" type="boolean" default="true">
+          Enable host rewriting for StatefulSet pods.
+        </ParamField>
+        
+        <ParamField path="initContainer.image" type="object">
+          Init container image configuration.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.secrets" type="object">
+  Secret synchronization configuration.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable secret syncing.
+    </ParamField>
+
+    <ParamField path="all" type="boolean" default="false">
+      Sync all secrets or only necessary ones.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.configMaps" type="object">
+  ConfigMap synchronization configuration.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable ConfigMap syncing.
+    </ParamField>
+
+    <ParamField path="all" type="boolean" default="false">
+      Sync all ConfigMaps or only necessary ones.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.services" type="object">
+  Service synchronization configuration.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable service syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.endpoints" type="object">
+  Endpoints synchronization configuration.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable endpoints syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.endpointSlices" type="object">
+  EndpointSlices synchronization configuration.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable EndpointSlices syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Storage Resources
+
+<ParamField path="sync.toHost.persistentVolumeClaims" type="object">
+  PersistentVolumeClaim synchronization.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable PVC syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.persistentVolumes" type="object">
+  PersistentVolume synchronization.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable PV syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.storageClasses" type="object">
+  StorageClass synchronization.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable StorageClass syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.volumeSnapshots" type="object">
+  VolumeSnapshot synchronization.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable VolumeSnapshot syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.volumeSnapshotContents" type="object">
+  VolumeSnapshotContent synchronization.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable VolumeSnapshotContent syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Network Resources
+
+<ParamField path="sync.toHost.ingresses" type="object">
+  Ingress synchronization.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable Ingress syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.networkPolicies" type="object">
+  NetworkPolicy synchronization.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable NetworkPolicy syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Other Resources
+
+<ParamField path="sync.toHost.serviceAccounts" type="object">
+  ServiceAccount synchronization.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable ServiceAccount syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.podDisruptionBudgets" type="object">
+  PodDisruptionBudget synchronization.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable PodDisruptionBudget syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.priorityClasses" type="object">
+  PriorityClass synchronization.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable PriorityClass syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.namespaces" type="object" pro>
+  Namespace synchronization (PRO feature).
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable namespace syncing.
+    </ParamField>
+
+    <ParamField path="mappingsOnly" type="boolean" default="false">
+      Only allow namespace creation if matched by mappings.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## FromHost Synchronization
+
+<ParamField path="sync.fromHost" type="object">
+  Configure resources to sync from the host cluster to the virtual cluster.
+</ParamField>
+
+### Events and Configs
+
+<ParamField path="sync.fromHost.events" type="object">
+  Event synchronization from host to virtual cluster.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable event syncing from host.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.fromHost.configMaps" type="object">
+  ConfigMap synchronization from host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable ConfigMap syncing from host.
+    </ParamField>
+
+    <ParamField path="mappings.byName" type="object">
+      Name-based mappings for ConfigMaps.
+      ```yaml
+      mappings:
+        byName:
+          "host-namespace/config-name": "vcluster-namespace/config-name"
+          "host-namespace/*": "vcluster-namespace/*"
+      ```
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.fromHost.secrets" type="object">
+  Secret synchronization from host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable secret syncing from host.
+    </ParamField>
+
+    <ParamField path="mappings.byName" type="object">
+      Name-based mappings for secrets.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Storage and CSI
+
+<ParamField path="sync.fromHost.storageClasses" type="object">
+  StorageClass synchronization from host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="string" default="auto">
+      Enable StorageClass syncing. `auto` enables when virtual scheduler is enabled.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.fromHost.csiDrivers" type="object">
+  CSIDriver synchronization from host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="string" default="auto">
+      Enable CSIDriver syncing. `auto` enables when virtual scheduler is enabled.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.fromHost.csiNodes" type="object">
+  CSINode synchronization from host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="string" default="auto">
+      Enable CSINode syncing. `auto` enables when virtual scheduler is enabled.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.fromHost.csiStorageCapacities" type="object">
+  CSIStorageCapacity synchronization from host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="string" default="auto">
+      Enable CSIStorageCapacity syncing. `auto` enables when virtual scheduler is enabled.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Nodes
+
+<ParamField path="sync.fromHost.nodes" type="object">
+  Node synchronization from host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Sync real nodes from host. If disabled, vCluster creates fake nodes.
+    </ParamField>
+
+    <ParamField path="syncBackChanges" type="boolean" default="false">
+      Sync labels and taints from virtual cluster back to host nodes.
+    </ParamField>
+
+    <ParamField path="clearImageStatus" type="boolean" default="false">
+      Clear image status when syncing nodes to hide pulled images.
+    </ParamField>
+
+    <ParamField path="selector" type="object">
+      Node selector configuration.
+      
+      <Expandable title="properties">
+        <ParamField path="all" type="boolean" default="false">
+          Sync all nodes or only nodes with assigned pods.
+        </ParamField>
+        
+        <ParamField path="labels" type="object">
+          Label selector for nodes to sync.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Other Resources
+
+<ParamField path="sync.fromHost.ingressClasses" type="object">
+  IngressClass synchronization from host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable IngressClass syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.fromHost.runtimeClasses" type="object">
+  RuntimeClass synchronization from host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable RuntimeClass syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.fromHost.priorityClasses" type="object">
+  PriorityClass synchronization from host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable PriorityClass syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Example: Basic Pod Syncing
+
+```yaml
+sync:
+  toHost:
+    pods:
+      enabled: true
+      translateImage:
+        "nginx:latest": "my-registry.com/nginx:1.21"
+      enforceTolerations:
+        - key: "workload"
+          operator: "Equal"
+          value: "vcluster"
+          effect: "NoSchedule"
+```
+
+## Example: Sync All Secrets and ConfigMaps
+
+```yaml
+sync:
+  toHost:
+    secrets:
+      enabled: true
+      all: true
+    configMaps:
+      enabled: true
+      all: true
+```
+
+## Example: Host ConfigMap Mapping
+
+```yaml
+sync:
+  fromHost:
+    configMaps:
+      enabled: true
+      mappings:
+        byName:
+          # Sync specific ConfigMap
+          "kube-system/coredns": "kube-system/coredns"
+          # Sync all ConfigMaps from namespace
+          "monitoring/*": "monitoring/*"
+          # Sync from vCluster host namespace to virtual namespace
+          "/shared-config": "default/shared-config"
+```
+
+## Example: Real Node Syncing
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      syncBackChanges: false
+      clearImageStatus: true
+      selector:
+        all: false
+        labels:
+          vcluster-node: "true"
+```
+
+## Example: Storage Syncing
+
+```yaml
+sync:
+  toHost:
+    persistentVolumeClaims:
+      enabled: true
+    volumeSnapshots:
+      enabled: true
+    volumeSnapshotContents:
+      enabled: true
+  fromHost:
+    storageClasses:
+      enabled: true
+```
+
+## Related Configuration
+
+- See [Storage Options](/config/storage-options) for persistence configuration
+- See [Networking Options](/config/networking-options) for service and ingress syncing
+- See [Values Reference](/config/values-reference) for all options

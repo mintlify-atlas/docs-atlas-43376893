@@ -1,0 +1,387 @@
+---
+title: "cert-manager Integration"
+description: "Integrate vCluster with cert-manager for automated certificate management across virtual and host clusters"
+---
+
+## Overview
+
+The cert-manager integration enables vCluster to leverage an existing cert-manager installation running on the host cluster. This integration allows you to manage TLS certificates within your virtual cluster while utilizing the host cluster's cert-manager infrastructure.
+
+<Note>
+**Key Benefits:**
+- Reuse existing cert-manager installation on the host cluster
+- No need to deploy cert-manager in each virtual cluster
+- Seamless certificate management across cluster boundaries
+- Access to host cluster's ClusterIssuers from within virtual clusters
+</Note>
+
+<Warning>
+The cert-manager integration is **not supported in private nodes mode**. It requires the shared or dedicated nodes architecture.
+</Warning>
+
+## How It Works
+
+When the cert-manager integration is enabled, vCluster automatically syncs specific cert-manager custom resources between the virtual and host clusters:
+
+**From Virtual Cluster → Host Cluster:**
+- `Certificates` - Certificate requests created in the virtual cluster are synced to the host
+- `Issuers` - Namespace-scoped issuers are synced to the host cluster
+
+**From Host Cluster → Virtual Cluster:**
+- `ClusterIssuers` - Cluster-wide issuers from the host are available in the virtual cluster
+
+The integration ensures proper namespace translation and maintains the relationship between certificates and their corresponding secrets.
+
+## Prerequisites
+
+Before enabling the cert-manager integration:
+
+1. **cert-manager must be installed on the host cluster**
+   ```bash
+   # Install cert-manager on the host cluster
+   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
+   ```
+
+2. **Verify cert-manager is running**
+   ```bash
+   kubectl get pods -n cert-manager
+   ```
+
+3. **Ensure cert-manager CRDs are installed**
+   ```bash
+   kubectl get crd | grep cert-manager
+   ```
+
+## Setup Instructions
+
+### Basic Configuration
+
+Enable the cert-manager integration in your vCluster values file:
+
+```yaml values.yaml
+integrations:
+  certManager:
+    enabled: true
+```
+
+Deploy or upgrade your vCluster:
+
+```bash
+vcluster create my-vcluster -n team-x -f values.yaml
+```
+
+### Advanced Configuration
+
+You can customize which resources are synced:
+
+```yaml values.yaml
+integrations:
+  certManager:
+    enabled: true
+    sync:
+      toHost:
+        # Sync certificates from virtual to host cluster
+        certificates:
+          enabled: true
+        # Sync issuers from virtual to host cluster
+        issuers:
+          enabled: true
+      fromHost:
+        # Sync cluster issuers from host to virtual cluster
+        clusterIssuers:
+          enabled: true
+          # Optional: Filter which ClusterIssuers to sync
+          selector:
+            labels:
+              environment: production
+```
+
+### Selective ClusterIssuer Syncing
+
+To sync only specific ClusterIssuers from the host cluster, use label selectors:
+
+```yaml values.yaml
+integrations:
+  certManager:
+    enabled: true
+    sync:
+      fromHost:
+        clusterIssuers:
+          enabled: true
+          selector:
+            labels:
+              vcluster-accessible: "true"
+```
+
+Then label the ClusterIssuers on the host cluster:
+
+```bash
+kubectl label clusterissuer letsencrypt-prod vcluster-accessible=true
+```
+
+## Usage Examples
+
+### Using a ClusterIssuer from the Host
+
+Once enabled, ClusterIssuers from the host cluster are automatically available in your virtual cluster:
+
+```bash
+# List available ClusterIssuers in the virtual cluster
+kubectl get clusterissuers
+```
+
+Create a Certificate using a host ClusterIssuer:
+
+```yaml certificate.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: my-app-tls
+  namespace: default
+spec:
+  secretName: my-app-tls-secret
+  issuerRef:
+    name: letsencrypt-prod  # ClusterIssuer from host
+    kind: ClusterIssuer
+  dnsNames:
+    - my-app.example.com
+```
+
+Apply the certificate:
+
+```bash
+kubectl apply -f certificate.yaml
+```
+
+### Creating a Virtual Cluster Issuer
+
+You can create Issuers within your virtual cluster that will be synced to the host:
+
+```yaml issuer.yaml
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: ca-issuer
+  namespace: default
+spec:
+  ca:
+    secretName: ca-key-pair
+```
+
+```bash
+kubectl apply -f issuer.yaml
+```
+
+### Using Certificates with Ingress
+
+Automatically provision TLS certificates for your Ingress resources:
+
+```yaml ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-app
+  namespace: default
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+  - hosts:
+    - my-app.example.com
+    secretName: my-app-tls
+  rules:
+  - host: my-app.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: my-app
+            port:
+              number: 80
+```
+
+## Validation
+
+Verify that the integration is working correctly:
+
+### 1. Check Certificate Status
+
+```bash
+# In the virtual cluster
+kubectl get certificates
+kubectl describe certificate my-app-tls
+```
+
+Expected output:
+```
+Status:
+  Conditions:
+    Type:   Ready
+    Status: True
+  Renewal Time: 2026-05-05T12:00:00Z
+```
+
+### 2. Verify Secret Creation
+
+```bash
+# Check if the TLS secret was created
+kubectl get secret my-app-tls-secret
+kubectl describe secret my-app-tls-secret
+```
+
+### 3. Check Host Cluster Resources
+
+```bash
+# Switch to host cluster context
+vcluster disconnect
+
+# Check synced resources in the host namespace
+kubectl get certificates -n team-x
+kubectl get issuers -n team-x
+```
+
+You should see the virtual cluster resources synced with translated names.
+
+## Common Issues and Solutions
+
+### Issue: Certificates Not Being Issued
+
+**Symptoms:** Certificate remains in pending state
+
+**Solution:**
+1. Check cert-manager logs on the host cluster:
+   ```bash
+   kubectl logs -n cert-manager deploy/cert-manager -f
+   ```
+
+2. Verify the ClusterIssuer exists and is ready:
+   ```bash
+   kubectl get clusterissuer letsencrypt-prod -o yaml
+   ```
+
+3. Check Certificate events:
+   ```bash
+   kubectl describe certificate my-app-tls
+   ```
+
+### Issue: ClusterIssuers Not Visible in Virtual Cluster
+
+**Symptoms:** `kubectl get clusterissuers` shows no resources
+
+**Solution:**
+1. Verify the integration is enabled:
+   ```bash
+   vcluster list
+   # Check the values used for the vCluster
+   ```
+
+2. Check if label selectors are too restrictive:
+   ```yaml
+   integrations:
+     certManager:
+       sync:
+         fromHost:
+           clusterIssuers:
+             selector:
+               labels: {}  # Remove filters temporarily
+   ```
+
+3. Restart the vCluster control plane:
+   ```bash
+   kubectl rollout restart statefulset -n team-x
+   ```
+
+### Issue: Duplicate Resources on Host
+
+**Symptoms:** Multiple certificates with similar names on the host cluster
+
+**Solution:**
+This is expected behavior. vCluster translates resource names to avoid conflicts. The naming pattern is:
+```
+<resource-name>-x-<namespace>-x-<vcluster-name>
+```
+
+Don't manually modify or delete these resources on the host cluster.
+
+### Issue: Integration Conflicts with Custom Resources
+
+**Error:** `cert-manager integration is enabled but cert-manager custom resource is also set in sync.toHost.customResources`
+
+**Solution:**
+Remove cert-manager CRDs from manual sync configuration:
+
+```yaml
+# ❌ Don't do this when integration is enabled
+sync:
+  toHost:
+    customResources:
+      certificates.cert-manager.io:
+        enabled: true
+
+# ✅ Use integration instead
+integrations:
+  certManager:
+    enabled: true
+```
+
+## Configuration Reference
+
+Complete configuration options from `chart/values.yaml:970-989`:
+
+```yaml
+integrations:
+  certManager:
+    # Enable/disable the cert-manager integration
+    enabled: false
+    
+    # Configure resource syncing
+    sync:
+      # Resources synced from virtual to host cluster
+      toHost:
+        # Certificate resources
+        certificates:
+          enabled: true
+        # Issuer resources (namespace-scoped)
+        issuers:
+          enabled: true
+      
+      # Resources synced from host to virtual cluster
+      fromHost:
+        # ClusterIssuer resources (cluster-scoped)
+        clusterIssuers:
+          enabled: true
+          # Filter which ClusterIssuers to sync
+          selector:
+            labels: {}
+```
+
+## Best Practices
+
+1. **Use ClusterIssuers for Shared Infrastructure**
+   - Create ClusterIssuers on the host cluster for common certificate authorities
+   - Let multiple virtual clusters reuse the same issuers
+
+2. **Implement Label-Based Filtering**
+   - Use label selectors to control which ClusterIssuers are visible to virtual clusters
+   - Prevent access to sensitive or internal-only issuers
+
+3. **Monitor Certificate Renewal**
+   - Set up monitoring for certificate expiration
+   - Use cert-manager's Prometheus metrics on the host cluster
+
+4. **Test in Development First**
+   - Enable the integration in a development virtual cluster first
+   - Verify certificate issuance before promoting to production
+
+5. **Avoid Manual Sync Configuration**
+   - Don't manually configure cert-manager CRDs in `sync.toHost.customResources`
+   - Use the integration's built-in sync logic instead
+
+## Related Resources
+
+- [cert-manager Documentation](https://cert-manager.io/docs/)
+- [vCluster Syncing Overview](/syncing/overview)
+- [Custom Resource Syncing](/syncing/custom-resources)
+- [Integration Source Code](https://github.com/loft-sh/vcluster/tree/main/pkg/integrations)

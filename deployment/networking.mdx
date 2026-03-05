@@ -1,0 +1,632 @@
+---
+title: Networking
+description: Configure networking for vCluster deployments including DNS, services, and network policies
+---
+
+This guide covers networking configuration for vCluster, including DNS resolution, service synchronization, ingress, and network policies.
+
+## Networking Architecture
+
+vCluster provides isolated networking for virtual clusters while leveraging the host cluster's network infrastructure:
+
+- **Pod networking**: Virtual cluster pods run in the host cluster with synced resources
+- **Service networking**: Services are synchronized between clusters with translation
+- **DNS resolution**: CoreDNS provides DNS within the virtual cluster
+- **Network policies**: Can be enforced at both virtual and host levels
+
+## CoreDNS Configuration
+
+CoreDNS handles DNS resolution within the virtual cluster.
+
+### Basic CoreDNS Setup
+
+```yaml
+controlPlane:
+  coredns:
+    enabled: true
+    
+    # Use embedded CoreDNS (PRO feature)
+    embedded: false
+    
+    deployment:
+      # Number of CoreDNS replicas
+      replicas: 2
+      
+      # Custom CoreDNS image
+      image: ""  # Leave empty for default
+      
+      resources:
+        requests:
+          cpu: 20m
+          memory: 64Mi
+        limits:
+          cpu: 1000m
+          memory: 170Mi
+      
+      # High availability
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              k8s-app: vcluster-kube-dns
+```
+
+### Custom DNS Configuration
+
+Override the CoreDNS configuration:
+
+```yaml
+controlPlane:
+  coredns:
+    # Custom Corefile configuration
+    overwriteConfig: |
+      .:1053 {
+        errors
+        health
+        ready
+        rewrite name regex .*\.nodes\.vcluster\.com kubernetes.default.svc.cluster.local
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+          pods insecure
+          fallthrough in-addr.arpa ip6.arpa
+        }
+        hosts /etc/coredns/NodeHosts {
+          ttl 60
+          reload 15s
+          fallthrough
+        }
+        prometheus :9153
+        forward . /etc/resolv.conf
+        cache 30
+        loop
+        reload
+        loadbalance
+      }
+      
+      import /etc/coredns/custom/*.server
+```
+
+### DNS Settings
+
+```yaml
+networking:
+  advanced:
+    # Cluster domain for the virtual cluster
+    clusterDomain: "cluster.local"
+    
+    # Fallback to host cluster DNS
+    fallbackHostCluster: false
+  
+  # Custom DNS rules (requires embedded CoreDNS)
+  resolveDNS:
+    - hostname: "my-service.example.com"
+      ip: "1.2.3.4"
+    - hostname: "database.external.com" 
+      service: "postgres.production"  # Resolves to service
+```
+
+## Pod Networking
+
+### Pod CIDR Configuration
+
+For private nodes mode, configure the pod CIDR:
+
+```yaml
+networking:
+  # Pod CIDR for virtual cluster (private nodes only)
+  podCIDR: "10.244.0.0/16"
+```
+
+<Note>
+  The pod CIDR is only relevant when using private nodes mode. In standard mode, pods use the host cluster's network.
+</Note>
+
+### Pod Network Translation
+
+Translate container images for air-gapped or private registry scenarios:
+
+```yaml
+sync:
+  toHost:
+    pods:
+      enabled: true
+      
+      # Image translation rules
+      translateImage:
+        "docker.io/*": "my-registry.com/dockerhub/*"
+        "gcr.io/*": "my-registry.com/gcr/*"
+        "ghcr.io/myorg/*": "registry.local/myorg/*"
+```
+
+## Service Synchronization
+
+### Basic Service Sync
+
+Enable service synchronization between clusters:
+
+```yaml
+sync:
+  toHost:
+    # Sync services from virtual to host
+    services:
+      enabled: true
+  
+  fromHost:
+    # No services synced from host by default
+    services: {}
+```
+
+### Service Replication
+
+Replicate specific services between virtual and host clusters:
+
+```yaml
+networking:
+  replicateServices:
+    # Sync services from virtual cluster to host
+    toHost:
+      - from: "default/my-app"
+        to: "production/my-app"
+      - from: "backend/api"
+        to: "exposed/api"
+    
+    # Sync services from host to virtual cluster
+    fromHost:
+      - from: "production/database"
+        to: "default/database"
+      - from: "monitoring/prometheus"
+        to: "default/prometheus"
+```
+
+Use cases:
+- **toHost**: Expose virtual cluster services to host cluster
+- **fromHost**: Access host cluster services from virtual cluster
+
+<Warning>
+  When replicating services across namespaces, ensure the vCluster service account has permissions for the target namespace.
+</Warning>
+
+### Service Types
+
+vCluster supports all Kubernetes service types:
+
+**ClusterIP** (default):
+```yaml
+sync:
+  toHost:
+    services:
+      enabled: true
+```
+
+**LoadBalancer**:
+```yaml
+sync:
+  toHost:
+    services:
+      enabled: true
+
+# Services of type LoadBalancer are synced and provisioned by host cluster
+```
+
+**NodePort**:
+```yaml
+sync:
+  toHost:
+    services:
+      enabled: true
+
+# NodePort services use host cluster nodes' ports
+```
+
+## Ingress Configuration
+
+### External Ingress Access
+
+Expose vCluster via ingress:
+
+```yaml
+controlPlane:
+  ingress:
+    enabled: true
+    host: "vcluster.example.com"
+    pathType: ImplementationSpecific
+    
+    annotations:
+      # Cert Manager
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      
+      # NGINX Ingress Controller
+      nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+      nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      
+      # Traefik
+      # traefik.ingress.kubernetes.io/router.tls: "true"
+    
+    spec:
+      ingressClassName: nginx
+      tls:
+        - hosts:
+            - vcluster.example.com
+          secretName: vcluster-tls
+```
+
+### Ingress for Workloads
+
+Sync ingresses from virtual cluster to host:
+
+```yaml
+sync:
+  toHost:
+    ingresses:
+      enabled: true
+
+# Sync ingress classes from host
+sync:
+  fromHost:
+    ingressClasses:
+      enabled: true
+```
+
+Example workload ingress in virtual cluster:
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-app
+  namespace: default
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: my-app.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: my-app
+                port:
+                  number: 80
+```
+
+## LoadBalancer Services
+
+### Cloud Provider LoadBalancers
+
+LoadBalancer services in the virtual cluster are synced to the host:
+
+```yaml
+sync:
+  toHost:
+    services:
+      enabled: true
+
+# In virtual cluster:
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: my-app
+# spec:
+#   type: LoadBalancer
+#   ports:
+#     - port: 80
+#   selector:
+#     app: my-app
+```
+
+### MetalLB for Bare Metal
+
+Deploy MetalLB for LoadBalancer services on bare metal:
+
+```yaml
+deploy:
+  metallb:
+    enabled: true
+    ipAddressPool:
+      addresses:
+        - "192.168.1.100-192.168.1.150"
+      l2Advertisement: true
+```
+
+<Note>
+  MetalLB is deployed in the host cluster and provisions IPs for LoadBalancer services in the virtual cluster.
+</Note>
+
+## Network Policies
+
+### Enable Network Policies
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    
+    # Fallback DNS when network policies are enforced
+    fallbackDns: "8.8.8.8"
+    
+    # Control plane network rules
+    controlPlane:
+      ingress:
+        - from:
+            - namespaceSelector:
+                matchLabels:
+                  name: vcluster-my-vcluster
+          ports:
+            - protocol: TCP
+              port: 8443
+      
+      egress:
+        - to:
+            - namespaceSelector: {}
+          ports:
+            - protocol: TCP
+              port: 443
+        - to:
+            - podSelector: {}
+          ports:
+            - protocol: TCP
+              port: 53
+            - protocol: UDP
+              port: 53
+    
+    # Workload network rules
+    workload:
+      # Allow public egress
+      publicEgress:
+        enabled: true
+        cidr: "0.0.0.0/0"
+        except:
+          - "100.64.0.0/10"
+          - "127.0.0.0/8"
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+      
+      # Custom ingress rules
+      ingress:
+        - from:
+            - podSelector:
+                matchLabels:
+                  role: frontend
+          ports:
+            - protocol: TCP
+              port: 8080
+      
+      # Custom egress rules
+      egress:
+        - to:
+            - podSelector:
+                matchLabels:
+                  role: database
+          ports:
+            - protocol: TCP
+              port: 5432
+```
+
+### Sync Network Policies
+
+Sync network policies from virtual cluster to host:
+
+```yaml
+sync:
+  toHost:
+    networkPolicies:
+      enabled: true
+```
+
+## Kubelet Proxy Configuration
+
+Enable kubelet proxying for metrics and monitoring:
+
+```yaml
+networking:
+  advanced:
+    proxyKubelets:
+      # Proxy by hostname (works with most tools)
+      byHostname: true
+      
+      # Proxy by IP (required for Prometheus node exporters)
+      byIP: true
+```
+
+This allows tools like Prometheus to scrape metrics from virtual cluster nodes.
+
+## Service Exposure Patterns
+
+### Pattern 1: Direct Host Access
+
+Expose virtual cluster service directly in host cluster:
+
+```yaml
+networking:
+  replicateServices:
+    toHost:
+      - from: "default/api"
+        to: "vcluster-prod/api"
+```
+
+Access from host cluster:
+```bash
+curl http://api.vcluster-prod.svc.cluster.local
+```
+
+### Pattern 2: Ingress Gateway
+
+Use ingress controller for external access:
+
+```yaml
+sync:
+  toHost:
+    ingresses:
+      enabled: true
+
+sync:
+  fromHost:
+    ingressClasses:
+      enabled: true
+```
+
+Create ingress in virtual cluster that syncs to host.
+
+### Pattern 3: LoadBalancer Service
+
+Provision LoadBalancer for direct external access:
+
+```yaml
+# In virtual cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 443
+      targetPort: 8443
+  selector:
+    app: api
+```
+
+### Pattern 4: NodePort Service
+
+Use NodePort for host cluster node access:
+
+```yaml
+controlPlane:
+  service:
+    spec:
+      type: NodePort
+    httpsNodePort: 31443  # Fixed NodePort
+```
+
+## Multi-Tenancy Networking
+
+### Isolated Networks
+
+Each vCluster provides network isolation by default:
+
+- Virtual cluster pods cannot directly access other vCluster's pods
+- Services are namespaced and isolated
+- Network policies enforce additional restrictions
+
+### Shared Services
+
+Share host services across multiple vClusters:
+
+```yaml
+# In vCluster A
+networking:
+  replicateServices:
+    fromHost:
+      - from: "shared/database"
+        to: "default/database"
+
+# In vCluster B  
+networking:
+  replicateServices:
+    fromHost:
+      - from: "shared/database"
+        to: "default/database"
+```
+
+## Troubleshooting Networking Issues
+
+### DNS Resolution Problems
+
+**Problem**: Pods can't resolve service names.
+
+**Debug steps**:
+```bash
+# Check CoreDNS is running
+kubectl get pods -n kube-system -l k8s-app=kube-dns
+
+# Test DNS resolution
+kubectl run -it --rm debug --image=busybox --restart=Never -- nslookup kubernetes
+
+# Check CoreDNS logs
+kubectl logs -n kube-system -l k8s-app=kube-dns
+```
+
+**Solution**: Verify CoreDNS configuration and ensure it's properly configured.
+
+### Service Not Accessible
+
+**Problem**: Cannot access service from within virtual cluster.
+
+**Debug steps**:
+```bash
+# Verify service exists
+kubectl get svc
+
+# Check service endpoints
+kubectl get endpoints my-service
+
+# Verify pods are running
+kubectl get pods -l app=my-service
+
+# Check if service is synced to host
+kubectl get svc -n vcluster-my-vcluster
+```
+
+### Network Policy Blocking Traffic
+
+**Problem**: Pods can't communicate despite services existing.
+
+**Debug steps**:
+```bash
+# Check network policies
+kubectl get networkpolicy
+
+# Describe network policy
+kubectl describe networkpolicy my-policy
+
+# Temporarily disable to test
+kubectl delete networkpolicy my-policy
+```
+
+### LoadBalancer Pending
+
+**Problem**: LoadBalancer service stuck in pending state.
+
+**Debug steps**:
+```bash
+# Check if host cluster has LoadBalancer support
+kubectl get svc -n vcluster-my-vcluster
+
+# Check cloud controller logs
+kubectl logs -n kube-system -l app=cloud-controller-manager
+```
+
+**Solution**: Ensure host cluster has LoadBalancer capability or deploy MetalLB.
+
+## Best Practices
+
+<Steps>
+  <Step title="Use Service Replication Sparingly">
+    Only replicate services that truly need cross-cluster access. Over-replication increases complexity.
+  </Step>
+
+  <Step title="Enable Network Policies for Production">
+    Always enable network policies in production for defense in depth.
+  </Step>
+
+  <Step title="Monitor DNS Performance">
+    Deploy multiple CoreDNS replicas and monitor DNS query latency.
+  </Step>
+
+  <Step title="Test Network Segmentation">
+    Verify that network isolation works as expected between tenants.
+  </Step>
+
+  <Step title="Document Service Dependencies">
+    Maintain clear documentation of which services are replicated and why.
+  </Step>
+</Steps>
+
+## Next Steps
+
+- [Storage Configuration](/deployment/storage) - Configure persistent storage
+- [High Availability](/deployment/high-availability) - Set up HA networking
+- [Configuration](/deployment/configuration) - Explore all configuration options

@@ -1,0 +1,965 @@
+---
+title: Dedicated Nodes Architecture
+description: Compute isolation using labeled node pools within the host cluster
+---
+
+Dedicated nodes architecture provides compute isolation by assigning specific host cluster nodes to each virtual cluster. Virtual cluster workloads run only on their dedicated nodes, providing stronger isolation than shared nodes while still leveraging the host cluster's infrastructure.
+
+## How It Works
+
+In dedicated nodes mode, the vCluster control plane runs in a host namespace, but workloads are scheduled only on labeled host nodes assigned to that virtual cluster:
+
+```
+┌─────────────────────────── Host Cluster ────────────────────────────┐
+│                                                                        │
+│   ┌──────────────────────────────────────────────────────┐     │
+│   │ Namespace: vcluster-tenant-a                     │     │
+│   │  ┌──────────────────────────────────────────┐ │     │
+│   │  │ vCluster Control Plane (tenant-a)     │ │     │
+│   │  └──────────────────────────────────────────┘ │     │
+│   │  ┌──────────────────────────────────────────┐ │     │
+│   │  │ Workload Pods (from tenant-a)        │ │     │
+│   │  └──────────────────────────────────────────┘ │     │
+│   └──────────────────────────────────────────────────────┘     │
+│                                                                        │
+│   ┌──────────────────────────────────────────────────────┐     │
+│   │ Dedicated Nodes for tenant-a                    │     │
+│   │  - node-tenant-a-1 (label: tenant=tenant-a)      │     │
+│   │    └─> Runs ONLY tenant-a workloads                │     │
+│   │  - node-tenant-a-2 (label: tenant=tenant-a)      │     │
+│   │    └─> Runs ONLY tenant-a workloads                │     │
+│   └──────────────────────────────────────────────────────┘     │
+│                                                                        │
+│   ┌──────────────────────────────────────────────────────┐     │
+│   │ Dedicated Nodes for tenant-b                    │     │
+│   │  - node-tenant-b-1 (label: tenant=tenant-b)      │     │
+│   │    └─> Runs ONLY tenant-b workloads                │     │
+│   └──────────────────────────────────────────────────────┘     │
+│                                                                        │
+│   ┌──────────────────────────────────────────────────────┐     │
+│   │ Shared Nodes (for host workloads)              │     │
+│   │  - node-1, node-2, node-3                        │     │
+│   └──────────────────────────────────────────────────────┘     │
+│                                                                        │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Characteristics
+
+<Check>**Compute Isolation**: Each vCluster's workloads run only on assigned nodes</Check>
+<Check>**Real Node Visibility**: Host nodes are synced into the virtual cluster</Check>
+<Check>**Shared Infrastructure**: Still uses host CNI, CSI, and control plane</Check>
+<Check>**Node Selectors**: Automatic node selector and toleration injection</Check>
+<Check>**Better Isolation**: Physical separation of workload execution</Check>
+
+## Configuration
+
+### Basic Setup
+
+The core configuration enables node syncing with label selectors:
+
+```yaml dedicated-nodes.yaml
+# Enable syncing of real nodes from host cluster
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          tenant: my-tenant  # Only sync nodes with this label
+
+# Automatically inject node selector and tolerations
+sync:
+  toHost:
+    pods:
+      enforceTolerations:
+        - key: "tenant"
+          operator: "Equal"
+          value: "my-tenant"
+          effect: "NoSchedule"
+```
+
+### Prepare Host Nodes
+
+Before creating the vCluster, label and taint the dedicated nodes:
+
+```bash
+# Label nodes for the tenant
+kubectl label nodes node-1 node-2 tenant=my-tenant
+
+# Taint nodes to prevent other workloads
+kubectl taint nodes node-1 node-2 tenant=my-tenant:NoSchedule
+
+# Verify
+kubectl get nodes -l tenant=my-tenant
+```
+
+### Create Dedicated Nodes vCluster
+
+<Tabs>
+  <Tab title="CLI with values">
+    ```bash
+    vcluster create my-tenant \
+      --namespace vcluster-my-tenant \
+      --values dedicated-nodes.yaml
+    ```
+  </Tab>
+
+  <Tab title="Helm">
+    ```bash
+    helm install my-tenant vcluster \
+      --repo https://charts.loft.sh \
+      --namespace vcluster-my-tenant \
+      --create-namespace \
+      --values dedicated-nodes.yaml
+    ```
+  </Tab>
+
+  <Tab title="Complete values.yaml">
+    ```yaml
+    # Complete dedicated nodes configuration
+    sync:
+      fromHost:
+        nodes:
+          enabled: true
+          selector:
+            labels:
+              tenant: my-tenant
+          # Sync back changes (labels/taints) from virtual to host
+          syncBackChanges: false
+          # Hide image status for security
+          clearImageStatus: false
+      
+      toHost:
+        pods:
+          enabled: true
+          # Enforce tolerations on all pods
+          enforceTolerations:
+            - key: "tenant"
+              operator: "Equal"
+              value: "my-tenant"
+              effect: "NoSchedule"
+    
+    # Resource limits for the control plane
+    controlPlane:
+      statefulSet:
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            memory: 2Gi
+    
+    # Optional: Resource quotas for the virtual cluster
+    policies:
+      resourceQuota:
+        enabled: true
+        quota:
+          requests.cpu: 32
+          requests.memory: 64Gi
+          limits.cpu: 64
+          limits.memory: 128Gi
+    ```
+  </Tab>
+</Tabs>
+
+### Verify Node Isolation
+
+Check that nodes are correctly synced:
+
+```bash
+# Connect to virtual cluster
+vcluster connect my-tenant --namespace vcluster-my-tenant
+
+# List nodes (should only show labeled nodes)
+kubectl get nodes
+# NAME     STATUS   ROLES    AGE   VERSION
+# node-1   Ready    <none>   5d    v1.28.0
+# node-2   Ready    <none>   5d    v1.28.0
+
+# Create a test pod
+kubectl run test --image=nginx
+
+# Verify it runs on dedicated nodes
+kubectl get pod test -o wide
+# NAME   READY   STATUS    NODE
+# test   1/1     Running   node-1
+```
+
+## Use Cases
+
+### Production Multi-Tenancy
+
+**Perfect for:** SaaS platforms, managed Kubernetes offerings, enterprise multi-tenancy
+
+```yaml production-tenant.yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          tenant: "{{.Values.tenantId}}"
+          tier: production
+  toHost:
+    pods:
+      enforceTolerations:
+        - key: tenant
+          operator: Equal
+          value: "{{.Values.tenantId}}"
+          effect: NoSchedule
+        - key: tier
+          operator: Equal
+          value: production
+          effect: NoSchedule
+
+policies:
+  resourceQuota:
+    enabled: true
+  limitRange:
+    enabled: true
+  networkPolicy:
+    enabled: true
+```
+
+**Benefits:**
+- Strong compute isolation
+- Predictable performance
+- Clear resource attribution
+- Compliance-friendly
+
+### GPU Workloads
+
+**Perfect for:** AI/ML platforms, rendering farms, data processing
+
+```yaml gpu-tenant.yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          gpu: "true"
+          tenant: ai-team
+  toHost:
+    pods:
+      enforceTolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+        - key: tenant
+          operator: Equal
+          value: ai-team
+          effect: NoSchedule
+
+# Allow GPU resource requests
+rbac:
+  role:
+    extraRules:
+      - apiGroups: [""]
+        resources: ["nodes"]
+        verbs: ["get", "list"]
+```
+
+**Setup GPU Nodes:**
+
+```bash
+# Label GPU nodes
+kubectl label nodes gpu-node-1 gpu-node-2 \
+  gpu=true \
+  tenant=ai-team
+
+# Taint GPU nodes
+kubectl taint nodes gpu-node-1 gpu-node-2 \
+  nvidia.com/gpu=present:NoSchedule \
+  tenant=ai-team:NoSchedule
+```
+
+**Use in Virtual Cluster:**
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-workload
+spec:
+  containers:
+    - name: cuda
+      image: nvidia/cuda:12.0-base
+      resources:
+        limits:
+          nvidia.com/gpu: 1  # Request GPU
+```
+
+### Tiered Service Levels
+
+**Perfect for:** Offering different performance tiers to customers
+
+<Tabs>
+  <Tab title="Premium Tier">
+    ```yaml premium-tier.yaml
+    sync:
+      fromHost:
+        nodes:
+          enabled: true
+          selector:
+            labels:
+              tier: premium
+              tenant: customer-123
+    
+    # High resource limits
+    policies:
+      resourceQuota:
+        quota:
+          requests.cpu: 64
+          requests.memory: 256Gi
+    ```
+    
+    **Node Characteristics:**
+    - Latest generation instances
+    - NVMe SSDs
+    - Higher network bandwidth
+  </Tab>
+
+  <Tab title="Standard Tier">
+    ```yaml standard-tier.yaml
+    sync:
+      fromHost:
+        nodes:
+          enabled: true
+          selector:
+            labels:
+              tier: standard
+              tenant: customer-456
+    
+    policies:
+      resourceQuota:
+        quota:
+          requests.cpu: 32
+          requests.memory: 128Gi
+    ```
+    
+    **Node Characteristics:**
+    - Current generation instances
+    - Standard SSDs
+    - Standard networking
+  </Tab>
+
+  <Tab title="Economy Tier">
+    ```yaml economy-tier.yaml
+    sync:
+      fromHost:
+        nodes:
+          enabled: true
+          selector:
+            labels:
+              tier: economy
+              tenant: customer-789
+    
+    policies:
+      resourceQuota:
+        quota:
+          requests.cpu: 16
+          requests.memory: 64Gi
+    ```
+    
+    **Node Characteristics:**
+    - Spot/preemptible instances
+    - Standard disks
+    - Shared networking
+  </Tab>
+</Tabs>
+
+### Compliance and Data Residency
+
+**Perfect for:** Regulated industries, data sovereignty requirements
+
+```yaml compliance-tenant.yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          compliance: pci-dss
+          region: us-west-2
+          zone: us-west-2a
+  toHost:
+    pods:
+      enforceTolerations:
+        - key: compliance
+          operator: Equal
+          value: pci-dss
+          effect: NoExecute
+
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      publicEgress:
+        enabled: false  # Block internet egress
+```
+
+## Advanced Configuration
+
+### Multi-Zone Node Selection
+
+Select nodes from specific availability zones:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          tenant: my-tenant
+          topology.kubernetes.io/zone: us-east-1a
+```
+
+### Dynamic Node Selection
+
+Use expressions for complex node selection:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          tenant: my-tenant
+        # These nodes must also have high-memory label
+        matchExpressions:
+          - key: node.kubernetes.io/instance-type
+            operator: In
+            values:
+              - m5.4xlarge
+              - m5.8xlarge
+              - r5.4xlarge
+```
+
+### Sync Node Changes Back
+
+Allow users in virtual cluster to label/taint their nodes:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          tenant: my-tenant
+      syncBackChanges: true  # Sync labels/taints back to host
+```
+
+<Warning>
+  **Security Risk**: Enabling `syncBackChanges` allows virtual cluster users to modify host nodes. Only enable this for trusted tenants.
+</Warning>
+
+### Hide Node Images
+
+Prevent users from seeing what images are cached on nodes:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          tenant: my-tenant
+      clearImageStatus: true  # Remove image information
+```
+
+## Networking
+
+### Pod Networking
+
+Pods still use the host cluster's CNI:
+
+```bash
+# Virtual cluster pod
+kubectl get pod nginx -o wide
+# NAME    IP           NODE
+# nginx   10.244.2.5   node-1
+
+# Uses host CNI (e.g., Calico, Cilium, etc.)
+```
+
+### Network Policies
+
+Network policies can isolate tenant traffic:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      # Block cross-tenant communication
+      egress:
+        - to:
+            - podSelector: {}  # Same vCluster only
+      ingress:
+        - from:
+            - podSelector: {}  # Same vCluster only
+```
+
+### Service Mesh Integration
+
+Dedicated nodes work well with service meshes:
+
+```yaml
+# Example: Istio integration
+integrations:
+  istio:
+    enabled: true
+    sync:
+      toHost:
+        virtualServices:
+          enabled: true
+        destinationRules:
+          enabled: true
+
+# Automatic sidecar injection
+sync:
+  toHost:
+    pods:
+      enabled: true
+      # Preserve Istio annotations
+      translateAnnotations:
+        - sidecar.istio.io/*
+```
+
+## Storage
+
+### Using Host Storage Classes
+
+Storage classes are synced from the host:
+
+```yaml
+sync:
+  fromHost:
+    storageClasses:
+      enabled: true  # Sync all host storage classes
+```
+
+### Dedicated Storage
+
+You can provision storage on dedicated nodes:
+
+<Tabs>
+  <Tab title="Local Path Provisioner">
+    ```yaml
+    # Use local storage on dedicated nodes
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: local-data
+    spec:
+      storageClassName: local-path
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 100Gi
+    ```
+    
+    The volume will be created on one of the dedicated nodes.
+  </Tab>
+
+  <Tab title="Node-Specific PVs">
+    ```yaml
+    # Provision PV on specific node
+    apiVersion: v1
+    kind: PersistentVolume
+    metadata:
+      name: data-on-node-1
+    spec:
+      capacity:
+        storage: 100Gi
+      accessModes:
+        - ReadWriteOnce
+      persistentVolumeReclaimPolicy: Retain
+      storageClassName: local-storage
+      local:
+        path: /mnt/data
+      nodeAffinity:
+        required:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: In
+                  values:
+                    - node-1
+    ```
+  </Tab>
+</Tabs>
+
+## Performance Characteristics
+
+### Resource Overhead
+
+**Per vCluster:**
+- **Control Plane**: 200-500MB memory, 100-200m CPU
+- **Syncer Overhead**: Minimal (watches real nodes)
+- **Node Resources**: Full dedicated node capacity available
+
+### Capacity Planning
+
+**Example Setup:**
+- Host Cluster: 100 nodes (8 CPU, 32GB RAM each)
+- Dedicated allocation: 10 vClusters with 5 nodes each
+- Remaining: 50 nodes for host workloads and additional vClusters
+
+### Scaling Limits
+
+| Metric | Dedicated Nodes |
+|--------|----------------:|
+| Nodes per vCluster | 1-1000+ |
+| vClusters per host | Limited by available nodes |
+| Pods per node | Same as host cluster |
+| Control plane overhead | ~200-500MB per vCluster |
+
+## Pros and Cons
+
+### Advantages
+
+<Check>**Compute Isolation**: Workloads cannot interfere with each other</Check>
+<Check>**Predictable Performance**: Dedicated resources prevent "noisy neighbor"</Check>
+<Check>**Real Node Access**: Users see and can manage real nodes</Check>
+<Check>**Better Troubleshooting**: Clear resource attribution</Check>
+<Check>**Compliance Friendly**: Physical separation aids audits</Check>
+<Check>**GPU Support**: Ideal for GPU workloads requiring isolation</Check>
+
+### Limitations
+
+<Warning>**Lower Density**: Requires dedicating physical nodes</Warning>
+<Warning>**Higher Cost**: More nodes needed vs shared architecture</Warning>
+<Warning>**Shared CNI/CSI**: Still uses host networking and storage</Warning>
+<Warning>**Shared Kernel**: Workloads share the host OS kernel</Warning>
+<Warning>**Node Management**: Must manage node labels and taints</Warning>
+
+### vs Shared Nodes
+
+| Aspect | Shared | Dedicated |
+|--------|:------:|:---------:|
+| Compute Isolation | ❌ | ✅ |
+| Cost Efficiency | ✅ | ❌ |
+| Setup Complexity | Low | Medium |
+| Noisy Neighbor | Possible | Prevented |
+| Resource Visibility | Limited | Full |
+
+### vs Private Nodes
+
+| Aspect | Dedicated | Private |
+|--------|:---------:|:-------:|
+| Network Isolation | ❌ | ✅ |
+| Storage Isolation | ❌ | ✅ |
+| Setup Complexity | Medium | High |
+| Host Dependency | High | Low |
+| CNI Independence | ❌ | ✅ |
+
+## Automation and Tooling
+
+### Automatic Node Provisioning
+
+Use Cluster Autoscaler or Karpenter to provision nodes automatically:
+
+<Tabs>
+  <Tab title="Cluster Autoscaler">
+    ```yaml
+    # Node group for tenant
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: cluster-autoscaler-config
+    data:
+      tenant-nodes: |
+        {
+          "name": "tenant-a-pool",
+          "minSize": 2,
+          "maxSize": 10,
+          "labels": {
+            "tenant": "tenant-a"
+          },
+          "taints": [
+            {"key": "tenant", "value": "tenant-a", "effect": "NoSchedule"}
+          ]
+        }
+    ```
+  </Tab>
+
+  <Tab title="Karpenter">
+    ```yaml
+    apiVersion: karpenter.sh/v1beta1
+    kind: NodePool
+    metadata:
+      name: tenant-a
+    spec:
+      template:
+        metadata:
+          labels:
+            tenant: tenant-a
+        spec:
+          taints:
+            - key: tenant
+              value: tenant-a
+              effect: NoSchedule
+          requirements:
+            - key: karpenter.sh/capacity-type
+              operator: In
+              values: ["on-demand"]
+            - key: kubernetes.io/arch
+              operator: In
+              values: ["amd64"]
+      limits:
+        cpu: 100
+        memory: 400Gi
+    ```
+  </Tab>
+</Tabs>
+
+### GitOps Workflow
+
+Manage vClusters and node assignments with GitOps:
+
+```yaml
+# tenants/tenant-a/vcluster.yaml
+apiVersion: storage.loft.sh/v1
+kind: VirtualCluster
+metadata:
+  name: tenant-a
+  namespace: vcluster-tenant-a
+spec:
+  config: |
+    sync:
+      fromHost:
+        nodes:
+          enabled: true
+          selector:
+            labels:
+              tenant: tenant-a
+---
+# tenants/tenant-a/nodes.yaml
+apiVersion: v1
+kind: Node
+metadata:
+  name: node-tenant-a-1
+  labels:
+    tenant: tenant-a
+spec:
+  taints:
+    - key: tenant
+      value: tenant-a
+      effect: NoSchedule
+```
+
+## Troubleshooting
+
+### Pods Not Scheduling
+
+**Symptom**: Pods stuck in `Pending` state
+
+```bash
+# Check events
+kubectl describe pod <pod-name>
+
+# Common issues:
+# 1. No nodes match the tolerations
+# 2. Insufficient resources on dedicated nodes
+# 3. Node selector mismatch
+```
+
+**Solution**:
+
+```bash
+# Verify nodes are labeled correctly
+kubectl get nodes -l tenant=my-tenant
+
+# Check node resources
+kubectl top nodes
+
+# Verify pod has correct tolerations (on host)
+kubectl get pod -n vcluster-my-tenant <pod-name> -o yaml | grep -A5 tolerations
+```
+
+### Nodes Not Appearing in Virtual Cluster
+
+**Symptom**: `kubectl get nodes` shows no nodes
+
+```bash
+# Check syncer logs
+kubectl logs -n vcluster-my-tenant <vcluster-pod> -c syncer
+
+# Verify node labels on host
+kubectl get nodes --show-labels | grep tenant
+```
+
+**Solution**: Ensure node selector matches labeled nodes:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          tenant: my-tenant  # Must match actual node labels
+```
+
+### Performance Issues
+
+**Symptom**: Slow performance despite dedicated nodes
+
+```bash
+# Check node resources
+kubectl top nodes
+
+# Check for resource contention
+kubectl describe node <node-name> | grep -A20 "Allocated resources"
+```
+
+**Solutions**:
+- Increase node size
+- Add more dedicated nodes
+- Review resource requests/limits
+- Check for CPU throttling or memory pressure
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Label and Taint Consistently" icon="tag">
+    Use consistent labeling and tainting schemes:
+
+    ```bash
+    # Standard pattern
+    kubectl label nodes <node> tenant=<tenant-id>
+    kubectl taint nodes <node> tenant=<tenant-id>:NoSchedule
+    ```
+
+    This prevents scheduling conflicts and simplifies automation.
+  </Accordion>
+
+  <Accordion title="Monitor Node Utilization" icon="chart-line">
+    Track resource usage per tenant:
+
+    ```bash
+    # Per-node metrics
+    kubectl top nodes -l tenant=my-tenant
+    
+    # Pod resource usage
+    kubectl top pods -A --sort-by=memory | grep my-tenant
+    ```
+
+    Use this data for capacity planning and cost attribution.
+  </Accordion>
+
+  <Accordion title="Implement Resource Quotas" icon="gauge">
+    Always set quotas to prevent over-provisioning:
+
+    ```yaml
+    policies:
+      resourceQuota:
+        enabled: true
+        quota:
+          requests.cpu: "32"  # Match dedicated node capacity
+          requests.memory: 128Gi
+    ```
+  </Accordion>
+
+  <Accordion title="Use Node Auto-Scaling" icon="arrows-up-down">
+    Automate node provisioning based on demand:
+
+    - **Cluster Autoscaler**: For managed Kubernetes (EKS, GKE, AKS)
+    - **Karpenter**: For more flexible provisioning
+    - **Custom Controllers**: For on-prem or hybrid setups
+  </Accordion>
+
+  <Accordion title="Test Failover Scenarios" icon="rotate">
+    Regularly test node failures:
+
+    ```bash
+    # Drain a node
+    kubectl drain node-1 --ignore-daemonsets
+    
+    # Verify pods reschedule to other dedicated nodes
+    kubectl get pods -o wide
+    
+    # Uncordon when done
+    kubectl uncordon node-1
+    ```
+  </Accordion>
+
+  <Accordion title="Document Node Assignments" icon="book">
+    Maintain documentation of node-to-tenant mappings:
+
+    ```yaml
+    # nodes-inventory.yaml
+    tenants:
+      tenant-a:
+        nodes: [node-1, node-2, node-3]
+        capacity:
+          cpu: 24
+          memory: 96Gi
+      tenant-b:
+        nodes: [node-4, node-5]
+        capacity:
+          cpu: 16
+          memory: 64Gi
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Migration
+
+### From Shared to Dedicated Nodes
+
+<Steps>
+  <Step title="Prepare Dedicated Nodes">
+    ```bash
+    kubectl label nodes node-1 node-2 tenant=my-tenant
+    kubectl taint nodes node-1 node-2 tenant=my-tenant:NoSchedule
+    ```
+  </Step>
+
+  <Step title="Update vCluster Configuration">
+    ```bash
+    vcluster upgrade my-tenant \
+      --namespace vcluster-my-tenant \
+      --values dedicated-nodes.yaml
+    ```
+  </Step>
+
+  <Step title="Trigger Pod Recreation">
+    ```bash
+    # Pods will be rescheduled with new node selectors
+    kubectl rollout restart deployment -A
+    ```
+  </Step>
+
+  <Step title="Verify">
+    ```bash
+    # All pods should be on dedicated nodes
+    kubectl get pods -A -o wide
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Private Nodes" icon="shield" href="/architecture/private-nodes">
+    Take isolation further with complete CNI/CSI independence.
+  </Card>
+  <Card title="Shared Nodes" icon="layer-group" href="/architecture/shared-nodes">
+    Compare with the shared nodes architecture.
+  </Card>
+  <Card title="Node Syncing" icon="sync" href="/vcluster/configure/vcluster-yaml/sync/from-host/nodes">
+    Advanced node syncing configuration options.
+  </Card>
+  <Card title="Auto Nodes" icon="wand-magic-sparkles" href="/architecture/auto-nodes">
+    Combine dedicated nodes with automatic provisioning.
+  </Card>
+</CardGroup>

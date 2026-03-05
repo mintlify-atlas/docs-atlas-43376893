@@ -1,0 +1,628 @@
+---
+title: "Installation Guide"
+description: "Complete guide to installing vCluster CLI and deploying virtual clusters"
+---
+
+## Overview
+
+This guide covers all methods for installing the vCluster CLI and deploying virtual clusters. The CLI is the primary tool for managing vClusters, though you can also use Helm directly for more control.
+
+## Prerequisites
+
+### System Requirements
+
+Before installing vCluster, ensure you have:
+
+<CardGroup cols={2}>
+  <Card title="Host Kubernetes Cluster" icon="server">
+    Kubernetes **v1.18+** with kubectl configured
+  </Card>
+  <Card title="Helm (for Helm installation)" icon="box">
+    Helm **v3.10.0+** installed locally
+  </Card>
+  <Card title="Resources" icon="microchip">
+    Minimum 2 CPU cores and 4GB RAM available
+  </Card>
+  <Card title="Permissions" icon="lock">
+    Ability to create namespaces and deploy resources
+  </Card>
+</CardGroup>
+
+<Note>
+  Don't have a Kubernetes cluster? Try [Minikube](https://minikube.sigs.k8s.io/), [Kind](https://kind.sigs.k8s.io/), or Docker Desktop for local development.
+</Note>
+
+## Installing the vCluster CLI
+
+The vCluster CLI (`vcluster`) is the recommended way to manage virtual clusters. Choose your installation method:
+
+### Homebrew (macOS and Linux)
+
+The easiest method for macOS and Linux users:
+
+<Steps>
+  <Step title="Install via Homebrew">
+    ```bash
+    brew install loft-sh/tap/vcluster
+    ```
+  </Step>
+  
+  <Step title="Verify Installation">
+    ```bash
+    vcluster --version
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  Homebrew automatically manages updates. Run `brew upgrade vcluster` to get the latest version.
+</Tip>
+
+### Direct Binary Download
+
+<Tabs>
+  <Tab title="Linux">
+    Download and install the vCluster binary directly:
+
+    ```bash
+    # Download the latest release for your architecture
+    curl -L -o vcluster "https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-$(uname -s)-$(uname -m)"
+    
+    # Make it executable
+    chmod +x vcluster
+    
+    # Move to your PATH
+    sudo mv vcluster /usr/local/bin/vcluster
+    
+    # Verify installation
+    vcluster --version
+    ```
+
+    <Accordion title="Install Specific Version">
+      To install a specific version instead of the latest:
+      
+      ```bash
+      VERSION="v0.30.0"
+      curl -L -o vcluster "https://github.com/loft-sh/vcluster/releases/download/${VERSION}/vcluster-$(uname -s)-$(uname -m)"
+      chmod +x vcluster
+      sudo mv vcluster /usr/local/bin/vcluster
+      ```
+    </Accordion>
+  </Tab>
+
+  <Tab title="macOS">
+    Download the binary for macOS:
+
+    ```bash
+    # For Apple Silicon (M1/M2/M3)
+    curl -L -o vcluster "https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-darwin-arm64"
+    
+    # For Intel Macs
+    # curl -L -o vcluster "https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-darwin-amd64"
+    
+    # Make it executable
+    chmod +x vcluster
+    
+    # Move to your PATH
+    sudo mv vcluster /usr/local/bin/vcluster
+    
+    # Verify installation
+    vcluster --version
+    ```
+
+    <Note>
+      macOS may show a security warning for unsigned binaries. Go to **System Preferences → Security & Privacy** to allow it, or use Homebrew instead.
+    </Note>
+  </Tab>
+
+  <Tab title="Windows">
+    Download the Windows binary:
+
+    **Option 1: Manual Download**
+    1. Download the latest release from [GitHub Releases](https://github.com/loft-sh/vcluster/releases)
+    2. Look for `vcluster-windows-amd64.exe`
+    3. Rename to `vcluster.exe`
+    4. Add to your PATH or move to a directory in your PATH
+
+    **Option 2: PowerShell Script**
+    ```powershell
+    # Create directory
+    md -Force "$Env:APPDATA\vcluster"
+    
+    # Download latest version
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]'Tls,Tls11,Tls12'
+    Invoke-WebRequest -UseBasicParsing ((Invoke-WebRequest -URI "https://github.com/loft-sh/vcluster/releases/latest" -UseBasicParsing).Content -replace "(?ms).*<a href=`"([^`"]*vcluster-windows-amd64.exe)`".*","https://github.com`$1") -o $Env:APPDATA\vcluster\vcluster.exe
+    
+    # Add to PATH
+    $env:Path += ";"+$Env:APPDATA+"\vcluster"
+    [Environment]::SetEnvironmentVariable("Path", $env:Path, [System.EnvironmentVariableTarget]::User)
+    
+    # Verify installation
+    vcluster --version
+    ```
+
+    <Warning>
+      You may need to restart your terminal after adding vCluster to your PATH.
+    </Warning>
+  </Tab>
+</Tabs>
+
+### Build from Source
+
+For developers or those wanting the latest development version:
+
+<Steps>
+  <Step title="Clone the Repository">
+    ```bash
+    git clone https://github.com/loft-sh/vcluster.git
+    cd vcluster
+    ```
+  </Step>
+  
+  <Step title="Install Build Dependencies">
+    You'll need:
+    - [Go 1.25+](https://go.dev/doc/install)
+    - [Just](https://github.com/casey/just) (optional, for build tasks)
+    - [GoReleaser](https://goreleaser.com/install/) (for snapshot builds)
+  </Step>
+  
+  <Step title="Build the CLI">
+    **Using Just (recommended):**
+    ```bash
+    just build-snapshot
+    ```
+
+    **Using Go directly:**
+    ```bash
+    go generate ./...
+    go build -o vcluster cmd/vclusterctl/main.go
+    ```
+  </Step>
+  
+  <Step title="Verify the Build">
+    ```bash
+    ./dist/<ARCH>/vcluster version
+    # Or if built with Go directly:
+    ./vcluster version
+    ```
+  </Step>
+</Steps>
+
+<Info>
+  For detailed development instructions, see the [Contributing Guide](https://github.com/loft-sh/vcluster/blob/main/CONTRIBUTING.md).
+</Info>
+
+## Deploying Virtual Clusters
+
+Once you have the CLI installed, you can deploy virtual clusters using different methods:
+
+### Method 1: Using vCluster CLI (Recommended)
+
+The CLI provides the simplest deployment experience:
+
+```bash
+# Basic deployment
+vcluster create my-vcluster --namespace team-x
+
+# With custom Kubernetes version
+vcluster create my-vcluster --namespace team-x --kubernetes-version 1.28
+
+# With custom values file
+vcluster create my-vcluster --namespace team-x -f vcluster.yaml
+
+# From a specific Helm chart version
+vcluster create my-vcluster --namespace team-x --chart-version 0.30.0
+```
+
+<Accordion title="Common CLI Flags">
+  | Flag | Description |
+  |------|-------------|
+  | `--namespace` | Namespace to deploy vCluster into (created if it doesn't exist) |
+  | `--kubernetes-version` | Kubernetes version for the virtual cluster |
+  | `-f, --values` | Path to a values.yaml file for Helm configuration |
+  | `--set` | Set individual values (e.g., `--set sync.toHost.ingresses.enabled=true`) |
+  | `--chart-version` | Specific vCluster Helm chart version to install |
+  | `--connect` | Automatically connect after creation (default: true) |
+  | `--upgrade` | Upgrade if already exists |
+  | `--create-namespace` | Create namespace if it doesn't exist (default: true) |
+</Accordion>
+
+### Method 2: Direct Helm Installation
+
+For more control or integration with existing Helm workflows:
+
+<Steps>
+  <Step title="Add Helm Repository">
+    ```bash
+    helm repo add loft-sh https://charts.loft.sh
+    helm repo update
+    ```
+  </Step>
+  
+  <Step title="Install the Chart">
+    ```bash
+    # Basic installation
+    helm upgrade --install my-vcluster loft-sh/vcluster \
+      --namespace team-x \
+      --create-namespace
+    
+    # With custom values
+    helm upgrade --install my-vcluster loft-sh/vcluster \
+      --namespace team-x \
+      --create-namespace \
+      --values vcluster.yaml
+    ```
+  </Step>
+  
+  <Step title="Connect to the vCluster">
+    After Helm installation, use the CLI to connect:
+    ```bash
+    vcluster connect my-vcluster --namespace team-x
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  The Helm chart is the same whether you use `vcluster create` or `helm install`. The CLI just provides convenience wrappers.
+</Tip>
+
+### Method 3: Docker Driver
+
+For local development without Kubernetes:
+
+```bash
+# Create a vCluster using Docker driver
+vcluster create my-vcluster --driver docker
+
+# List Docker-based vClusters
+vcluster list --driver docker
+
+# Delete Docker-based vCluster
+vcluster delete my-vcluster --driver docker
+```
+
+<Note>
+  The Docker driver runs vCluster in Docker containers instead of Kubernetes pods. This is useful for local testing but not recommended for production.
+</Note>
+
+## Configuration Options
+
+### Basic Configuration Example
+
+Create a `vcluster.yaml` file to customize your deployment:
+
+```yaml vcluster.yaml
+# Control plane configuration
+controlPlane:
+  backingStore:
+    etcd:
+      embedded:
+        enabled: true
+  statefulSet:
+    image:
+      tag: "1.29"  # Kubernetes version
+    resources:
+      limits:
+        cpu: 2
+        memory: 4Gi
+      requests:
+        cpu: 200m
+        memory: 512Mi
+
+# Resource syncing
+sync:
+  toHost:
+    pods:
+      enabled: true
+    services:
+      enabled: true
+    secrets:
+      enabled: true
+    configMaps:
+      enabled: true
+    ingresses:
+      enabled: true
+    persistentVolumeClaims:
+      enabled: true
+
+  fromHost:
+    nodes:
+      enabled: false  # Use pseudo nodes
+```
+
+Deploy with this configuration:
+```bash
+vcluster create my-vcluster -n team-x -f vcluster.yaml
+```
+
+### High Availability Configuration
+
+For production deployments with HA:
+
+```yaml vcluster-ha.yaml
+controlPlane:
+  backingStore:
+    etcd:
+      embedded:
+        enabled: true
+  statefulSet:
+    highAvailability:
+      replicas: 3
+    resources:
+      limits:
+        cpu: 4
+        memory: 8Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+```
+
+<Warning>
+  High availability requires at least 3 replicas and more cluster resources. Ensure your host cluster can support the additional load.
+</Warning>
+
+## Verification Steps
+
+After installation, verify everything is working:
+
+<Steps>
+  <Step title="Check vCluster Status">
+    ```bash
+    vcluster list
+    ```
+    
+    Your vCluster should show `STATUS: Running` and `CONNECTED: True`.
+  </Step>
+  
+  <Step title="Verify Pods">
+    ```bash
+    # In the host cluster
+    kubectl get pods -n team-x
+    ```
+    
+    You should see the vCluster control plane pod running.
+  </Step>
+  
+  <Step title="Test Virtual Cluster Access">
+    ```bash
+    # Connect to vCluster
+    vcluster connect my-vcluster -n team-x
+    
+    # Run commands in the virtual cluster
+    kubectl get namespaces
+    kubectl create deployment nginx --image=nginx
+    kubectl get pods
+    ```
+  </Step>
+</Steps>
+
+## Platform-Specific Notes
+
+### Local Kubernetes Clusters
+
+<Accordion title="Kind (Kubernetes in Docker)">
+  Kind works great with vCluster:
+  
+  ```bash
+  # Create a Kind cluster
+  kind create cluster
+  
+  # Create a vCluster
+  vcluster create my-vcluster -n test
+  ```
+  
+  If using custom Docker images during development:
+  ```bash
+  # Build your custom vCluster image
+  docker build . -t my-vcluster:0.0.1
+  
+  # Load into Kind
+  kind load docker-image my-vcluster:0.0.1
+  
+  # Deploy with custom image
+  vcluster create my-vcluster -n test -f custom-image.yaml
+  ```
+</Accordion>
+
+<Accordion title="Minikube">
+  Minikube is fully supported:
+  
+  ```bash
+  # Start Minikube
+  minikube start
+  
+  # Create vCluster
+  vcluster create my-vcluster -n test
+  ```
+  
+  For better performance, increase Minikube resources:
+  ```bash
+  minikube start --cpus=4 --memory=8192
+  ```
+</Accordion>
+
+<Accordion title="Docker Desktop">
+  Enable Kubernetes in Docker Desktop settings, then:
+  
+  ```bash
+  # Verify Kubernetes is running
+  kubectl cluster-info
+  
+  # Create vCluster
+  vcluster create my-vcluster -n test
+  ```
+</Accordion>
+
+### Cloud Providers
+
+<Accordion title="Amazon EKS">
+  vCluster works seamlessly with EKS:
+  
+  ```bash
+  # Configure kubectl for EKS
+  aws eks update-kubeconfig --name my-cluster --region us-west-2
+  
+  # Create vCluster
+  vcluster create my-vcluster -n team-x
+  ```
+  
+  Consider using external databases for production:
+  ```yaml
+  controlPlane:
+    backingStore:
+      database:
+        external:
+          enabled: true
+          dataSource: "postgres://user:pass@rds-endpoint:5432/vcluster"
+  ```
+</Accordion>
+
+<Accordion title="Google GKE">
+  ```bash
+  # Get GKE credentials
+  gcloud container clusters get-credentials my-cluster --region us-central1
+  
+  # Create vCluster
+  vcluster create my-vcluster -n team-x
+  ```
+</Accordion>
+
+<Accordion title="Azure AKS">
+  ```bash
+  # Get AKS credentials
+  az aks get-credentials --resource-group myResourceGroup --name myAKSCluster
+  
+  # Create vCluster
+  vcluster create my-vcluster -n team-x
+  ```
+</Accordion>
+
+## Upgrading vCluster
+
+### Upgrade the CLI
+
+<Tabs>
+  <Tab title="Homebrew">
+    ```bash
+    brew upgrade vcluster
+    ```
+  </Tab>
+  
+  <Tab title="Manual">
+    Download the latest binary using the same method as installation and replace the old one.
+  </Tab>
+</Tabs>
+
+### Upgrade a Virtual Cluster
+
+```bash
+# Upgrade to latest version
+vcluster upgrade my-vcluster --namespace team-x
+
+# Upgrade to specific version
+vcluster upgrade my-vcluster --namespace team-x --chart-version 0.30.0
+
+# Upgrade with new values
+vcluster upgrade my-vcluster --namespace team-x -f new-values.yaml
+```
+
+<Warning>
+  Always test upgrades in a non-production environment first. Review the [changelog](https://github.com/loft-sh/vcluster/releases) for breaking changes.
+</Warning>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="CLI Installation Issues">
+    **Problem**: `command not found: vcluster`
+    
+    **Solution**: 
+    - Verify the binary is in your PATH: `echo $PATH`
+    - Check installation location: `which vcluster`
+    - Restart your terminal after installation
+    - On macOS, check Security & Privacy settings for unsigned binaries
+  </Accordion>
+  
+  <Accordion title="Helm Version Errors">
+    **Problem**: `Error: Helm version 3.10.0 or higher is required`
+    
+    **Solution**:
+    ```bash
+    # Check Helm version
+    helm version
+    
+    # Upgrade Helm
+    # macOS/Linux
+    brew upgrade helm
+    
+    # Or download from https://github.com/helm/helm/releases
+    ```
+  </Accordion>
+  
+  <Accordion title="Pod Creation Stuck">
+    **Problem**: vCluster pod remains in `Pending` or `ContainerCreating`
+    
+    **Solution**:
+    ```bash
+    # Check pod events
+    kubectl describe pod -n team-x -l app=vcluster
+    
+    # Common causes:
+    # - Insufficient cluster resources
+    # - Image pull errors
+    # - PVC provisioning issues
+    
+    # Check node resources
+    kubectl top nodes
+    ```
+  </Accordion>
+  
+  <Accordion title="Connection Issues">
+    **Problem**: Cannot connect to vCluster after creation
+    
+    **Solution**:
+    ```bash
+    # Check vCluster status
+    vcluster list
+    
+    # Manually connect
+    vcluster connect my-vcluster -n team-x
+    
+    # Check kubeconfig
+    kubectl config get-contexts
+    
+    # View vCluster logs
+    kubectl logs -n team-x -l app=vcluster -c syncer
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+Now that you have vCluster installed:
+
+<CardGroup cols={2}>
+  <Card title="Quickstart Guide" icon="rocket" href="/quickstart" className="rounded-xl">
+    Create your first virtual cluster in under 5 minutes
+  </Card>
+  <Card title="Configuration Reference" icon="sliders" href="/config/values-reference" className="rounded-xl">
+    Explore all configuration options for customizing vClusters
+  </Card>
+  <Card title="Architecture Guide" icon="sitemap" href="/architecture/overview" className="rounded-xl">
+    Understand different deployment architectures
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/cli/overview" className="rounded-xl">
+    Learn all vCluster CLI commands and options
+  </Card>
+</CardGroup>
+
+## Additional Resources
+
+- **[Helm Chart README](https://github.com/loft-sh/vcluster/tree/main/chart)**: Detailed Helm chart documentation
+- **[GitHub Releases](https://github.com/loft-sh/vcluster/releases)**: Download specific versions and view changelogs
+- **[Contributing Guide](https://github.com/loft-sh/vcluster/blob/main/CONTRIBUTING.md)**: Build and contribute to vCluster
+- **[Community Slack](https://slack.loft.sh/)**: Get help from the community
+
+<Info>
+  For enterprise deployments with SSO, audit logs, and centralized management, explore [Loft vCluster Platform](https://www.vcluster.com/pro).
+</Info>

@@ -1,0 +1,484 @@
+---
+title: "Snapshots"
+description: "Create and manage point-in-time snapshots of your virtual clusters"
+---
+
+## Overview
+
+Snapshots capture the complete state of a virtual cluster at a specific point in time, including:
+
+- All Kubernetes resources (Deployments, Services, ConfigMaps, etc.)
+- Persistent data (optionally)
+- Virtual cluster configuration
+- Resource metadata and labels
+
+Snapshots are useful for:
+
+- **Backup and recovery**: Protect against data loss or mistakes
+- **Cloning environments**: Create exact copies for testing or development
+- **Migration**: Move virtual clusters between hosts or infrastructure
+- **Compliance**: Maintain point-in-time records for auditing
+
+## Snapshot Storage Backends
+
+vCluster supports multiple storage backends for snapshots:
+
+<CardGroup cols={2}>
+  <Card title="OCI Registries" icon="docker">
+    Store snapshots in container registries (Docker Hub, GHCR, etc.)
+  </Card>
+  
+  <Card title="S3-Compatible Storage" icon="aws">
+    Use AWS S3, MinIO, or other S3-compatible object storage
+  </Card>
+  
+  <Card title="Container Filesystem" icon="folder">
+    Store locally within the vCluster container
+  </Card>
+  
+  <Card title="Custom Backends" icon="plug">
+    Implement custom storage providers
+  </Card>
+</CardGroup>
+
+## Creating Snapshots
+
+### OCI Registry
+
+Store snapshots in a container registry:
+
+```bash
+vcluster snapshot create my-vcluster \
+  oci://ghcr.io/my-org/snapshots:my-vcluster-2024-01-15
+```
+
+<Steps>
+  <Step title="Authenticate to Registry">
+    Ensure you're logged in to your container registry:
+    
+    ```bash
+    docker login ghcr.io
+    ```
+  </Step>
+  
+  <Step title="Create Snapshot">
+    The command creates a snapshot request that is processed asynchronously:
+    
+    ```bash
+    vcluster snapshot create my-vcluster \
+      oci://ghcr.io/my-org/snapshots:my-vcluster-$(date +%Y%m%d-%H%M%S)
+    ```
+  </Step>
+  
+  <Step title="Verify Snapshot">
+    Check the snapshot was created successfully:
+    
+    ```bash
+    vcluster snapshot get my-vcluster \
+      oci://ghcr.io/my-org/snapshots:my-vcluster-2024-01-15
+    ```
+  </Step>
+</Steps>
+
+### S3-Compatible Storage
+
+Store snapshots in S3 or S3-compatible storage:
+
+```bash
+vcluster snapshot create my-vcluster \
+  s3://my-bucket/snapshots/my-vcluster-2024-01-15.tar.gz
+```
+
+**Prerequisites:**
+
+<Tabs>
+  <Tab title="AWS S3">
+    Configure AWS credentials in the vCluster:
+    
+    ```yaml
+    # vcluster.yaml
+    snapshots:
+      storage:
+        s3:
+          bucket: my-bucket
+          region: us-east-1
+          # Credentials from environment or IAM role
+    ```
+  </Tab>
+  
+  <Tab title="MinIO">
+    Configure MinIO endpoint:
+    
+    ```yaml
+    # vcluster.yaml
+    snapshots:
+      storage:
+        s3:
+          bucket: my-bucket
+          endpoint: https://minio.example.com
+          accessKeyID: minioadmin
+          secretAccessKey: minioadmin
+    ```
+  </Tab>
+  
+  <Tab title="Custom S3">
+    Configure any S3-compatible service:
+    
+    ```yaml
+    # vcluster.yaml
+    snapshots:
+      storage:
+        s3:
+          bucket: my-bucket
+          endpoint: https://s3.custom.com
+          region: custom-region
+    ```
+  </Tab>
+</Tabs>
+
+### Container Filesystem
+
+Store snapshots locally within the vCluster container:
+
+```bash
+vcluster snapshot create my-vcluster \
+  container:///data/snapshots/my-vcluster-$(date +%Y%m%d).tar.gz
+```
+
+<Warning>
+  Container filesystem snapshots are lost if the vCluster pod is deleted or recreated. Use for temporary snapshots only.
+</Warning>
+
+## Including Volumes
+
+By default, snapshots include resource definitions but not persistent volume data. To include volume data:
+
+```bash
+vcluster snapshot create my-vcluster \
+  oci://ghcr.io/my-org/snapshots:my-vcluster-full \
+  --include-volumes
+```
+
+**Requirements:**
+- VolumeSnapshot CRDs must be installed in the host cluster
+- Storage class must support volume snapshots
+- CSI driver must support snapshot functionality
+
+## Retrieving Snapshots
+
+### List Available Snapshots
+
+Get information about existing snapshots:
+
+```bash
+vcluster snapshot get my-vcluster oci://ghcr.io/my-org/snapshots:my-vcluster-2024-01-15
+```
+
+### Download Snapshot
+
+For OCI-stored snapshots, you can pull them like container images:
+
+```bash
+docker pull ghcr.io/my-org/snapshots:my-vcluster-2024-01-15
+```
+
+## Snapshot Workflow
+
+Understand how snapshots are processed:
+
+<Steps>
+  <Step title="Request Creation">
+    When you run `vcluster snapshot create`, a SnapshotRequest custom resource is created in the virtual cluster.
+  </Step>
+  
+  <Step title="Controller Processing">
+    The vCluster snapshot controller detects the request and begins processing:
+    - Collects all resources from the virtual cluster
+    - Serializes them to YAML/JSON
+    - Optionally creates volume snapshots
+    - Packages everything into a tarball
+  </Step>
+  
+  <Step title="Upload">
+    The packaged snapshot is uploaded to the specified storage backend.
+  </Step>
+  
+  <Step title="Completion">
+    The SnapshotRequest status is updated to reflect success or failure.
+  </Step>
+</Steps>
+
+## Monitoring Snapshot Progress
+
+Check the status of a snapshot operation:
+
+```bash
+kubectl get snapshotrequest -n <vcluster-namespace>
+```
+
+View detailed status:
+
+```bash
+kubectl describe snapshotrequest <snapshot-name> -n <vcluster-namespace>
+```
+
+## Snapshot Configuration
+
+Configure snapshot behavior in your `vcluster.yaml`:
+
+```yaml
+snapshots:
+  # Enable/disable snapshot functionality
+  enabled: true
+  
+  # Storage configuration
+  storage:
+    # OCI registry
+    oci:
+      registry: ghcr.io
+      repository: my-org/snapshots
+      # Authentication via imagePullSecrets
+    
+    # Or S3-compatible storage
+    s3:
+      bucket: my-snapshots
+      region: us-west-2
+      endpoint: https://s3.amazonaws.com
+      # Credentials from environment or IAM role
+  
+  # Retention policy
+  retention:
+    # Keep snapshots for 30 days
+    maxAge: 720h
+    # Keep maximum 10 snapshots
+    maxCount: 10
+```
+
+## Use Cases
+
+<AccordionGroup>
+  <Accordion title="Pre-Upgrade Backup">
+    **Scenario:** Create a safety snapshot before upgrading the virtual cluster.
+    
+    **Implementation:**
+    
+    ```bash
+    # Create pre-upgrade snapshot
+    vcluster snapshot create my-vcluster \
+      oci://ghcr.io/my-org/snapshots:my-vcluster-pre-upgrade-$(date +%Y%m%d)
+    
+    # Perform upgrade
+    helm upgrade my-vcluster vcluster \
+      --namespace team-dev \
+      --version 0.20.0
+    
+    # If upgrade fails, restore from snapshot
+    vcluster restore my-vcluster \
+      oci://ghcr.io/my-org/snapshots:my-vcluster-pre-upgrade-20240115
+    ```
+  </Accordion>
+  
+  <Accordion title="Environment Cloning">
+    **Scenario:** Clone a production virtual cluster for testing.
+    
+    **Implementation:**
+    
+    ```bash
+    # Create snapshot of production
+    vcluster snapshot create prod-vcluster \
+      oci://ghcr.io/my-org/snapshots:prod-baseline-$(date +%Y%m%d)
+    
+    # Create new test cluster from snapshot
+    vcluster create test-vcluster --namespace testing
+    
+    # Restore production state to test cluster
+    vcluster restore test-vcluster \
+      oci://ghcr.io/my-org/snapshots:prod-baseline-20240115
+    ```
+  </Accordion>
+  
+  <Accordion title="Disaster Recovery">
+    **Scenario:** Regular automated backups for disaster recovery.
+    
+    **Implementation:**
+    
+    Create a CronJob for automated snapshots:
+    
+    ```yaml
+    apiVersion: batch/v1
+    kind: CronJob
+    metadata:
+      name: vcluster-backup
+      namespace: vcluster-ops
+    spec:
+      schedule: "0 2 * * *"  # Daily at 2 AM
+      jobTemplate:
+        spec:
+          template:
+            spec:
+              serviceAccountName: vcluster-snapshot-sa
+              containers:
+              - name: snapshot
+                image: loftsh/vcluster-cli:latest
+                command:
+                - /bin/sh
+                - -c
+                - |
+                  TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+                  vcluster snapshot create production-vcluster \
+                    oci://ghcr.io/my-org/snapshots:production-${TIMESTAMP} \
+                    --namespace production
+              restartPolicy: OnFailure
+    ```
+  </Accordion>
+  
+  <Accordion title="Migration Between Clusters">
+    **Scenario:** Move a virtual cluster from one host cluster to another.
+    
+    **Implementation:**
+    
+    ```bash
+    # On source cluster
+    vcluster snapshot create my-vcluster \
+      oci://ghcr.io/my-org/snapshots:migration-$(date +%Y%m%d) \
+      --namespace source-ns
+    
+    # Switch to target cluster
+    kubectl config use-context target-cluster
+    
+    # Create new vcluster on target
+    vcluster create my-vcluster --namespace target-ns
+    
+    # Restore from snapshot
+    vcluster restore my-vcluster \
+      oci://ghcr.io/my-org/snapshots:migration-20240115 \
+      --namespace target-ns
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<Accordion title="Snapshot Creation Times Out">
+  **Symptoms:** Snapshot command hangs or times out.
+  
+  **Diagnosis:**
+  
+  Check snapshot request status:
+  ```bash
+  kubectl get snapshotrequest -n <namespace>
+  kubectl describe snapshotrequest <name> -n <namespace>
+  ```
+  
+  **Common Causes:**
+  - Large virtual cluster with many resources
+  - Network issues connecting to storage backend
+  - Insufficient permissions to access storage
+  
+  **Solutions:**
+  - Increase timeout: The snapshot is processed asynchronously, wait longer
+  - Check vCluster logs for errors:
+    ```bash
+    kubectl logs -n <namespace> -l app=vcluster --tail=100
+    ```
+  - Verify storage backend credentials and connectivity
+</Accordion>
+
+<Accordion title="Cannot Access OCI Registry">
+  **Error:** Authentication or permission errors when creating OCI snapshots.
+  
+  **Solution:**
+  
+  1. Create a registry credential secret:
+     ```bash
+     kubectl create secret docker-registry snapshot-registry \
+       --docker-server=ghcr.io \
+       --docker-username=<username> \
+       --docker-password=<token> \
+       --namespace <vcluster-namespace>
+     ```
+  
+  2. Configure vCluster to use the secret:
+     ```yaml
+     # vcluster.yaml
+     snapshots:
+       storage:
+         oci:
+           imagePullSecrets:
+           - snapshot-registry
+     ```
+  
+  3. Update the vCluster:
+     ```bash
+     helm upgrade my-vcluster vcluster \
+       --namespace <namespace> \
+       -f vcluster.yaml
+     ```
+</Accordion>
+
+<Accordion title="Volume Snapshots Not Included">
+  **Symptoms:** Persistent volume data is not in the snapshot.
+  
+  **Verification:**
+  
+  Check if VolumeSnapshot CRDs are installed:
+  ```bash
+  kubectl get crd | grep volumesnapshot
+  ```
+  
+  Check if storage class supports snapshots:
+  ```bash
+  kubectl get storageclass -o yaml | grep snapshot
+  ```
+  
+  **Solutions:**
+  
+  1. Install VolumeSnapshot CRDs if missing:
+     ```bash
+     kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/master/client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml
+     ```
+  
+  2. Verify CSI driver supports snapshots
+  
+  3. Use a snapshot-capable storage class
+</Accordion>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Regular Snapshots" icon="calendar-check">
+    Schedule automated snapshots for production virtual clusters using CronJobs.
+  </Card>
+  
+  <Card title="Naming Convention" icon="tag">
+    Use consistent, descriptive names with timestamps: `prod-vcluster-20240115-daily`
+  </Card>
+  
+  <Card title="Test Restores" icon="rotate">
+    Regularly test snapshot restoration to ensure they work when needed.
+  </Card>
+  
+  <Card title="Retention Policy" icon="trash">
+    Implement retention policies to automatically clean up old snapshots and control storage costs.
+  </Card>
+  
+  <Card title="Document Snapshots" icon="book">
+    Maintain documentation of important snapshots, their purpose, and contents.
+  </Card>
+  
+  <Card title="Secure Storage" icon="lock">
+    Use encrypted storage backends and secure access credentials with Kubernetes secrets.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Backup & Restore" icon="life-ring" href="/operations/backup-restore">
+    Learn how to restore from snapshots
+  </Card>
+  
+  <Card title="Upgrading" icon="arrow-up" href="/operations/upgrading">
+    Use snapshots as safety net during upgrades
+  </Card>
+</CardGroup>

@@ -1,0 +1,240 @@
+---
+title: Architecture Overview
+description: Understanding vCluster's flexible deployment architectures and how to choose the right one
+---
+
+vCluster offers multiple deployment architectures that provide progressively more isolation and independence. Each architecture builds on the previous one, allowing you to choose the right balance between isolation, resource efficiency, and operational complexity.
+
+## Architecture Spectrum
+
+vCluster architectures range from maximum density to complete isolation:
+
+```
+Shared Nodes → Dedicated Nodes → Private Nodes → Standalone
+  (Lowest isolation)              (Highest isolation)
+  (Highest density)               (Lowest density)
+```
+
+<CardGroup cols={2}>
+  <Card title="Shared Nodes" icon="layer-group" href="/architecture/shared-nodes">
+    Maximum density, minimum cost. Virtual clusters share host nodes.
+  </Card>
+  <Card title="Dedicated Nodes" icon="server" href="/architecture/dedicated-nodes">
+    Isolated compute on labeled node pools within the host cluster.
+  </Card>
+  <Card title="Private Nodes" icon="shield" href="/architecture/private-nodes">
+    Full CNI/CSI isolation with external nodes joining directly.
+  </Card>
+  <Card title="Standalone Mode" icon="microchip" href="/architecture/standalone-mode">
+    No host cluster required. vCluster runs on bare metal or VMs.
+  </Card>
+</CardGroup>
+
+## Architecture Comparison
+
+Choose your architecture based on your isolation, compliance, and infrastructure requirements:
+
+| Feature | Shared Nodes | Dedicated Nodes | Private Nodes | Standalone |
+|---------|:------------:|:---------------:|:-------------:|:----------:|
+| **Host Cluster Required** | Yes | Yes | Yes | No |
+| **Node Isolation** | ❌ | ✅ | ✅ | ✅ |
+| **CNI/CSI Isolation** | ❌ | ❌ | ✅ | ✅ |
+| **Network Isolation** | Namespace | Node Labels | Full | Full |
+| **Storage Isolation** | Namespace | Node Labels | Full | Full |
+| **Resource Efficiency** | Highest | High | Medium | Low |
+| **Setup Complexity** | Lowest | Low | Medium | Highest |
+| **Best For** | Dev/test, cost optimization | Production multi-tenancy | Compliance, GPU workloads | Bare metal, edge computing |
+
+## Core Components
+
+Regardless of architecture, all vCluster deployments include:
+
+### Control Plane Components
+
+<AccordionGroup>
+  <Accordion title="API Server" icon="server">
+    Each virtual cluster has its own Kubernetes API server that provides complete API isolation. Users interact with the virtual cluster through this API server, which handles authentication, authorization, and admission control.
+
+    The API server runs in the host cluster (or standalone) and maintains its own view of the cluster state.
+  </Accordion>
+
+  <Accordion title="Controller Manager" icon="gears">
+    Manages core Kubernetes controllers within the virtual cluster, handling workload lifecycle, service endpoints, and other built-in resources.
+
+    In shared and dedicated modes, some responsibilities are delegated to the host cluster for efficiency.
+  </Accordion>
+
+  <Accordion title="Data Store (etcd or SQL)" icon="database">
+    Stores the virtual cluster's state. Options include:
+    - **Embedded SQLite**: Default, runs in-process (easiest)
+    - **Embedded etcd**: High availability option
+    - **External etcd**: Deployed by Helm or externally managed
+    - **External Database**: PostgreSQL, MySQL, RDS via Kine
+  </Accordion>
+
+  <Accordion title="Syncer" icon="arrows-rotate">
+    The syncer is vCluster's core innovation. It synchronizes resources between the virtual and host clusters (or manages resources directly in standalone mode).
+
+    Key responsibilities:
+    - Syncing pods, services, and other resources
+    - Rewriting resource references and names
+    - Managing resource mappings and translation
+    - Handling bi-directional synchronization
+  </Accordion>
+</AccordionGroup>
+
+### Optional Components
+
+- **Scheduler**: Optional virtual scheduler (K8s distro only) for advanced scheduling
+- **CoreDNS**: Provides DNS resolution within the virtual cluster
+- **Konnectivity**: Reverse tunnel for private nodes communication
+- **Cloud Controller Manager**: Sets node IPs and provider IDs for private nodes
+
+## How vCluster Works
+
+<Steps>
+  <Step title="User Creates Resources">
+    Users interact with the virtual cluster API server using `kubectl` or other Kubernetes tools. The API server authenticates and authorizes requests, then stores resources in its data store.
+  </Step>
+
+  <Step title="Syncer Watches Resources">
+    The syncer watches for changes in the virtual cluster (and host cluster). It maintains mappings between virtual and physical resources.
+  </Step>
+
+  <Step title="Resources Get Translated">
+    When resources need to run on host infrastructure, the syncer translates them:
+    - Adds namespace prefixes to names
+    - Rewrites labels and annotations
+    - Injects tolerations and node selectors
+    - Maps virtual references to physical ones
+  </Step>
+
+  <Step title="Resources Run on Infrastructure">
+    Depending on the architecture:
+    - **Shared/Dedicated**: Pods run on host cluster nodes
+    - **Private**: Pods run on external nodes with their own CNI/CSI
+    - **Standalone**: Pods run on nodes joined directly to vCluster
+  </Step>
+
+  <Step title="Status Syncs Back">
+    The syncer watches physical resources and syncs status back to virtual resources, maintaining the illusion of a complete cluster.
+  </Step>
+</Steps>
+
+## Choosing an Architecture
+
+Use this decision tree to select the right architecture:
+
+<AccordionGroup>
+  <Accordion title="Do you have a Kubernetes cluster?">
+    **No**: Use [Standalone Mode](/architecture/standalone-mode)
+    
+    **Yes**: Continue to next question
+  </Accordion>
+
+  <Accordion title="Do you need complete network/storage isolation?">
+    **Yes**: Use [Private Nodes](/architecture/private-nodes)
+    
+    **No**: Continue to next question
+  </Accordion>
+
+  <Accordion title="Do you need compute isolation between tenants?">
+    **Yes**: Use [Dedicated Nodes](/architecture/dedicated-nodes)
+    
+    **No**: Use [Shared Nodes](/architecture/shared-nodes)
+  </Accordion>
+</AccordionGroup>
+
+### Quick Recommendations
+
+<CardGroup cols={2}>
+  <Card title="Development & Testing" icon="flask">
+    **Shared Nodes** - Fastest setup, lowest cost, perfect for temporary environments and CI/CD pipelines.
+  </Card>
+
+  <Card title="Production Multi-Tenancy" icon="building">
+    **Dedicated Nodes** - Good isolation without operational complexity, ideal for SaaS platforms and team environments.
+  </Card>
+
+  <Card title="Regulated Industries" icon="shield-halved">
+    **Private Nodes** - Complete isolation for compliance requirements like PCI-DSS, HIPAA, or SOC 2.
+  </Card>
+
+  <Card title="Bare Metal / Edge" icon="tower-cell">
+    **Standalone** - No host cluster needed, perfect for edge computing, bare metal, and maximum performance.
+  </Card>
+</CardGroup>
+
+## Resource Syncing
+
+All architectures use vCluster's resource syncing mechanism:
+
+### From Virtual to Host (toHost)
+
+Resources created in the virtual cluster that need to run on physical infrastructure:
+
+- **Pods**: Workload containers (always synced)
+- **Services**: Network endpoints
+- **PersistentVolumeClaims**: Storage requests
+- **ConfigMaps/Secrets**: Configuration data (only those referenced by pods)
+- **Endpoints/EndpointSlices**: Service backend information
+
+### From Host to Virtual (fromHost)
+
+Resources synced from host to virtual for compatibility:
+
+- **Nodes**: Host nodes (or fake nodes in shared mode)
+- **StorageClasses**: Available storage types
+- **IngressClasses**: Available ingress controllers
+- **Events**: Node and infrastructure events
+
+<Note>
+  In private and standalone modes, many "fromHost" syncs are disabled because the virtual cluster manages these resources directly.
+</Note>
+
+## Performance Characteristics
+
+### Shared Nodes
+- **Startup Time**: ~10-15 seconds
+- **Resource Overhead**: ~200MB memory, 0.2 CPU
+- **Density**: 50+ vClusters per host cluster
+
+### Dedicated Nodes
+- **Startup Time**: ~10-15 seconds
+- **Resource Overhead**: ~200MB + dedicated node resources
+- **Density**: Limited by available nodes
+
+### Private Nodes
+- **Startup Time**: ~30-60 seconds (node join time)
+- **Resource Overhead**: ~500MB + full node resources
+- **Density**: Limited by node provisioning
+
+### Standalone
+- **Startup Time**: ~60-120 seconds (full cluster bootstrap)
+- **Resource Overhead**: Full control plane + nodes
+- **Density**: 1 vCluster = 1 cluster
+
+## Security Considerations
+
+Security posture varies by architecture:
+
+| Aspect | Shared | Dedicated | Private | Standalone |
+|--------|--------|-----------|---------|------------|
+| **API Isolation** | ✅ | ✅ | ✅ | ✅ |
+| **Process Isolation** | Container | Container | VM/Bare Metal | VM/Bare Metal |
+| **Network Isolation** | Namespace | Node Labels | Full CNI | Full CNI |
+| **Storage Isolation** | Namespace | Node Labels | Full CSI | Full CSI |
+| **Host Access Required** | Yes (limited) | Yes (limited) | No | No |
+| **Attack Surface** | Highest | High | Low | Lowest |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Explore Architectures" icon="map">
+    Deep dive into each architecture to understand implementation details, configuration, and use cases.
+  </Card>
+
+  <Card title="Auto Nodes" icon="wand-magic-sparkles" href="/architecture/auto-nodes">
+    Learn about Karpenter-powered autoscaling for private nodes across any infrastructure.
+  </Card>
+</CardGroup>

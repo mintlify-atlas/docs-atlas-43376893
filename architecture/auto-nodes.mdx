@@ -1,0 +1,1049 @@
+---
+title: Auto Nodes
+description: Karpenter-powered automatic node provisioning for private nodes across any infrastructure
+---
+
+Auto Nodes brings Karpenter-powered autoscaling to vCluster private nodes, enabling automatic node provisioning and deprovisioning based on workload demand. It works across public cloud, private cloud, hybrid environments, and bare metal infrastructure.
+
+<Info>
+  **Introduced in v0.28**: Auto Nodes is a Pro feature available in vCluster Pro and requires vCluster Platform connection.
+</Info>
+
+## How It Works
+
+Auto Nodes integrates Karpenter's provisioning logic with vCluster private nodes. When pods can't be scheduled due to resource constraints, Auto Nodes automatically provisions new machines and joins them to the virtual cluster:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│               vCluster with Auto Nodes                      │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ Control Plane                                       │   │
+│  │  - API Server                                       │   │
+│  │  - Karpenter Controller (watches unschedulable)    │   │
+│  │  - Node Provider Integration                        │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                          │                                  │
+│                          │ Detects unschedulable pods       │
+│                          ▼                                  │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ Karpenter Provisioner                               │   │
+│  │  - Evaluates pod requirements                       │   │
+│  │  - Selects appropriate node type                    │   │
+│  │  - Calls node provider API                          │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                          │                                  │
+└──────────────────────────┼──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│           Node Provider (AWS/Azure/GCP/Bare Metal)          │
+│                                                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │ Create VM/   │  │ Install      │  │ Join vCluster│     │
+│  │ Instance     │→ │ vCluster     │→ │ as node      │     │
+│  └──────────────┘  └──────────────┘  └──────────────┘     │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+            New node automatically joins vCluster
+               and pods are scheduled on it
+```
+
+### Key Characteristics
+
+<Check>**Demand-Based**: Provisions nodes only when needed</Check>
+<Check>**Multi-Cloud**: Works across AWS, Azure, GCP, bare metal</Check>
+<Check>**Cost Optimization**: Automatically deprovisions idle nodes</Check>
+<Check>**Workload-Aware**: Selects node types based on pod requirements</Check>
+<Check>**GPU Support**: Automatically provisions GPU nodes when requested</Check>
+<Check>**Fast Provisioning**: Nodes ready in 2-5 minutes</Check>
+
+## Configuration
+
+### Basic Setup
+
+Auto Nodes requires private nodes mode and a node provider:
+
+```yaml auto-nodes.yaml
+# Enable private nodes
+privateNodes:
+  enabled: true
+  
+  # Configure auto nodes
+  autoNodes:
+    - name: default-nodes
+      enabled: true
+      nodeProvider: aws  # or azure, gcp, hetzner, etc.
+      
+      # Node requirements
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+            - t3.medium
+            - t3.large
+      
+      # Provisioner limits
+      limits:
+        cpu: 100
+        memory: 400Gi
+
+# Control plane must be exposed
+controlPlane:
+  service:
+    spec:
+      type: LoadBalancer
+
+# Pod network
+networking:
+  podCIDR: "10.244.0.0/16"
+
+# CNI and storage
+deploy:
+  cni:
+    flannel:
+      enabled: true
+  localPathProvisioner:
+    enabled: true
+```
+
+### Node Provider Configuration
+
+Each cloud provider requires specific configuration:
+
+<Tabs>
+  <Tab title="AWS">
+    ```yaml
+    privateNodes:
+      autoNodes:
+        - name: aws-nodes
+          enabled: true
+          nodeProvider: aws
+          
+          # AWS-specific configuration
+          providerConfig:
+            region: us-east-1
+            subnetSelector:
+              karpenter.sh/discovery: my-cluster
+            securityGroupSelector:
+              karpenter.sh/discovery: my-cluster
+            instanceProfile: KarpenterNodeInstanceProfile
+            amiFamily: AL2  # Amazon Linux 2
+          
+          # Instance types
+          requirements:
+            - key: karpenter.sh/capacity-type
+              operator: In
+              values: ["on-demand", "spot"]
+            - key: node.kubernetes.io/instance-type
+              operator: In
+              values:
+                - t3.medium
+                - t3.large
+                - t3.xlarge
+            - key: kubernetes.io/arch
+              operator: In
+              values: ["amd64"]
+          
+          # Limits
+          limits:
+            cpu: 1000
+            memory: 4000Gi
+    ```
+    
+    **IAM Permissions Required:**
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "ec2:RunInstances",
+            "ec2:CreateTags",
+            "ec2:TerminateInstances",
+            "ec2:DescribeInstances",
+            "ec2:DescribeInstanceTypes",
+            "ec2:DescribeSubnets",
+            "ec2:DescribeSecurityGroups",
+            "ec2:DescribeImages",
+            "iam:PassRole"
+          ],
+          "Resource": "*"
+        }
+      ]
+    }
+    ```
+  </Tab>
+
+  <Tab title="Azure">
+    ```yaml
+    privateNodes:
+      autoNodes:
+        - name: azure-nodes
+          enabled: true
+          nodeProvider: azure
+          
+          # Azure-specific configuration
+          providerConfig:
+            location: eastus
+            resourceGroup: my-vcluster-rg
+            vnetName: my-vnet
+            subnetName: my-subnet
+            
+          # VM sizes
+          requirements:
+            - key: node.kubernetes.io/instance-type
+              operator: In
+              values:
+                - Standard_D2s_v3
+                - Standard_D4s_v3
+                - Standard_D8s_v3
+          
+          limits:
+            cpu: 1000
+            memory: 4000Gi
+    ```
+    
+    **Azure Service Principal Required:**
+    ```bash
+    az ad sp create-for-rbac --name vcluster-karpenter \
+      --role Contributor \
+      --scopes /subscriptions/{subscription-id}/resourceGroups/{resource-group}
+    ```
+  </Tab>
+
+  <Tab title="GCP">
+    ```yaml
+    privateNodes:
+      autoNodes:
+        - name: gcp-nodes
+          enabled: true
+          nodeProvider: gcp
+          
+          # GCP-specific configuration
+          providerConfig:
+            project: my-project
+            zone: us-central1-a
+            network: default
+            subnetwork: default
+            serviceAccount: karpenter@my-project.iam.gserviceaccount.com
+          
+          # Machine types
+          requirements:
+            - key: node.kubernetes.io/instance-type
+              operator: In
+              values:
+                - n1-standard-2
+                - n1-standard-4
+                - n1-standard-8
+          
+          limits:
+            cpu: 1000
+            memory: 4000Gi
+    ```
+  </Tab>
+
+  <Tab title="Hetzner">
+    ```yaml
+    privateNodes:
+      autoNodes:
+        - name: hetzner-nodes
+          enabled: true
+          nodeProvider: hetzner
+          
+          # Hetzner-specific configuration
+          providerConfig:
+            location: nbg1  # Nuremberg
+            networkId: 123456
+            
+          # Server types
+          requirements:
+            - key: node.kubernetes.io/instance-type
+              operator: In
+              values:
+                - cx21   # 2 vCPU, 4GB RAM
+                - cx31   # 2 vCPU, 8GB RAM
+                - cx41   # 4 vCPU, 16GB RAM
+          
+          limits:
+            cpu: 100
+            memory: 400Gi
+    ```
+  </Tab>
+
+  <Tab title="Bare Metal">
+    ```yaml
+    privateNodes:
+      autoNodes:
+        - name: bare-metal-nodes
+          enabled: true
+          nodeProvider: baremetal
+          
+          # Bare metal provisioning
+          providerConfig:
+            # Integration with tools like Tinkerbell, MAAS, or custom
+            provisionerEndpoint: https://metal-provisioner.example.com
+            machinePool: worker-pool
+            
+          requirements:
+            - key: node.kubernetes.io/instance-type
+              operator: In
+              values:
+                - small   # 8 CPU, 32GB RAM
+                - medium  # 16 CPU, 64GB RAM
+                - large   # 32 CPU, 128GB RAM
+          
+          limits:
+            cpu: 512
+            memory: 2048Gi
+    ```
+  </Tab>
+</Tabs>
+
+### GPU Nodes
+
+Configure auto-provisioning for GPU workloads:
+
+```yaml
+privateNodes:
+  autoNodes:
+    - name: gpu-nodes
+      enabled: true
+      nodeProvider: aws
+      
+      # GPU instance types
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+            - p3.2xlarge   # NVIDIA V100
+            - p3.8xlarge
+            - g4dn.xlarge  # NVIDIA T4
+            - g4dn.4xlarge
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]  # GPU instances usually on-demand
+      
+      # GPU limits
+      limits:
+        nvidia.com/gpu: 16
+        cpu: 256
+        memory: 1024Gi
+      
+      # Consolidation settings
+      consolidation:
+        enabled: false  # Don't consolidate GPU nodes (expensive restarts)
+```
+
+**Using GPU Nodes:**
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-workload
+spec:
+  containers:
+    - name: cuda
+      image: nvidia/cuda:12.0-base
+      resources:
+        limits:
+          nvidia.com/gpu: 1  # Auto Nodes provisions GPU node
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+```
+
+### Multiple Node Pools
+
+Configure different pools for different workload types:
+
+```yaml
+privateNodes:
+  autoNodes:
+    # General purpose nodes
+    - name: general
+      enabled: true
+      nodeProvider: aws
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: [t3.medium, t3.large]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot", "on-demand"]
+      limits:
+        cpu: 100
+        memory: 400Gi
+      weight: 100  # Prefer general nodes
+    
+    # High-memory nodes
+    - name: high-memory
+      enabled: true
+      nodeProvider: aws
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: [r5.xlarge, r5.2xlarge, r5.4xlarge]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+      limits:
+        cpu: 200
+        memory: 1600Gi
+      weight: 50
+    
+    # GPU nodes
+    - name: gpu
+      enabled: true
+      nodeProvider: aws
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: [g4dn.xlarge, g4dn.2xlarge]
+      limits:
+        nvidia.com/gpu: 8
+        cpu: 64
+        memory: 256Gi
+      weight: 10  # Lowest priority (most expensive)
+```
+
+## Advanced Configuration
+
+### Consolidation
+
+Automatically consolidate underutilized nodes:
+
+```yaml
+privateNodes:
+  autoNodes:
+    - name: default
+      enabled: true
+      nodeProvider: aws
+      
+      # Consolidation configuration
+      consolidation:
+        enabled: true
+      
+      # Disruption budget
+      disruption:
+        consolidationPolicy: WhenUnderutilized
+        consolidateAfter: 30s
+        expireAfter: 720h  # 30 days
+        budgets:
+          - nodes: "10%"  # Disrupt max 10% of nodes at once
+```
+
+### Taints and Labels
+
+Apply custom taints and labels to provisioned nodes:
+
+```yaml
+privateNodes:
+  autoNodes:
+    - name: default
+      enabled: true
+      nodeProvider: aws
+      
+      # Node template
+      template:
+        metadata:
+          labels:
+            workload-type: general
+            managed-by: karpenter
+            environment: production
+        spec:
+          taints:
+            - key: workload-type
+              value: general
+              effect: NoSchedule
+          startupTaints:
+            - key: node.kubernetes.io/not-ready
+              value: "true"
+              effect: NoSchedule
+```
+
+### Node Lifecycle
+
+Control node lifecycle behavior:
+
+```yaml
+privateNodes:
+  autoNodes:
+    - name: default
+      enabled: true
+      nodeProvider: aws
+      
+      # Lifecycle settings
+      ttlSecondsUntilExpired: 2592000  # 30 days
+      ttlSecondsAfterEmpty: 30  # Delete after 30s if empty
+      
+      # Limits
+      limits:
+        cpu: 1000
+        memory: 4000Gi
+      
+      # Weight for provisioner selection
+      weight: 100
+```
+
+### User Data (Cloud-Init)
+
+Customize node initialization:
+
+```yaml
+privateNodes:
+  autoNodes:
+    - name: default
+      enabled: true
+      nodeProvider: aws
+      
+      providerConfig:
+        userData: |
+          #!/bin/bash
+          # Custom initialization
+          echo "Initializing vCluster node..."
+          
+          # Install monitoring agent
+          curl -o /tmp/agent.sh https://monitoring.example.com/install.sh
+          bash /tmp/agent.sh
+          
+          # Configure logging
+          mkdir -p /var/log/vcluster
+          systemctl enable vcluster-logging
+```
+
+## Use Cases
+
+### Cost-Optimized Development
+
+**Perfect for:** Development environments, testing, CI/CD
+
+```yaml
+privateNodes:
+  autoNodes:
+    - name: dev-spot
+      enabled: true
+      nodeProvider: aws
+      
+      # Prefer spot instances
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot"]  # Spot only for cost savings
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+            - t3.medium
+            - t3.large
+      
+      # Aggressive consolidation
+      consolidation:
+        enabled: true
+      
+      # Delete nodes quickly when unused
+      ttlSecondsAfterEmpty: 60
+      
+      limits:
+        cpu: 50
+        memory: 200Gi
+```
+
+**Savings:** 70-90% cost reduction using spot instances
+
+### Production with Mixed Capacity
+
+**Perfect for:** Production workloads with cost optimization
+
+```yaml
+privateNodes:
+  autoNodes:
+    - name: on-demand
+      enabled: true
+      nodeProvider: aws
+      
+      # On-demand for critical workloads
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: [m5.large, m5.xlarge, m5.2xlarge]
+      
+      limits:
+        cpu: 100
+        memory: 400Gi
+      
+      weight: 10  # Lowest priority (prefer spot)
+    
+    - name: spot
+      enabled: true
+      nodeProvider: aws
+      
+      # Spot for scalable workloads
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot"]
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: [m5.large, m5.xlarge, m5.2xlarge]
+      
+      limits:
+        cpu: 400
+        memory: 1600Gi
+      
+      weight: 100  # Highest priority
+```
+
+**Configuration for workloads:**
+
+```yaml
+# Critical workload - require on-demand
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: critical-app
+spec:
+  template:
+    spec:
+      nodeSelector:
+        karpenter.sh/capacity-type: on-demand
+      containers:
+        - name: app
+          image: critical-app:latest
+
+---
+# Scalable workload - allow spot
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+spec:
+  replicas: 10
+  template:
+    spec:
+      # No node selector - can use spot
+      containers:
+        - name: app
+          image: web-app:latest
+```
+
+### AI/ML with GPU Autoscaling
+
+**Perfect for:** ML training, inference workloads
+
+```yaml
+privateNodes:
+  autoNodes:
+    # CPU nodes for supporting services
+    - name: cpu
+      enabled: true
+      nodeProvider: aws
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: [c5.2xlarge, c5.4xlarge]
+      limits:
+        cpu: 100
+        memory: 400Gi
+    
+    # GPU nodes for training
+    - name: gpu-training
+      enabled: true
+      nodeProvider: aws
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: [p3.2xlarge, p3.8xlarge, p3.16xlarge]
+      limits:
+        nvidia.com/gpu: 32
+        cpu: 512
+        memory: 2048Gi
+      consolidation:
+        enabled: false  # Don't disrupt training jobs
+    
+    # GPU nodes for inference
+    - name: gpu-inference
+      enabled: true
+      nodeProvider: aws
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: [g4dn.xlarge, g4dn.2xlarge]
+      limits:
+        nvidia.com/gpu: 16
+        cpu: 128
+        memory: 512Gi
+      consolidation:
+        enabled: true  # Inference can be rescheduled
+      ttlSecondsAfterEmpty: 300  # Keep warm for 5 minutes
+```
+
+### Hybrid Cloud Bursting
+
+**Perfect for:** On-prem primary, cloud burst for overflow
+
+```yaml
+privateNodes:
+  autoNodes:
+    # On-premises nodes (manually joined)
+    # Auto Nodes doesn't provision these, they're static
+    
+    # AWS burst capacity
+    - name: aws-burst
+      enabled: true
+      nodeProvider: aws
+      requirements:
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values: [us-east-1a, us-east-1b]
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: [m5.large, m5.xlarge]
+      limits:
+        cpu: 200  # Limit cloud spend
+        memory: 800Gi
+      weight: 10  # Low priority (prefer on-prem)
+```
+
+**Label on-prem nodes:**
+```bash
+kubectl label nodes on-prem-1 on-prem-2 location=on-prem
+```
+
+**Workload preference:**
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  template:
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: location
+                    operator: In
+                    values: [on-prem]
+```
+
+## Monitoring
+
+### Metrics
+
+Auto Nodes exposes Prometheus metrics:
+
+```yaml
+# ServiceMonitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vcluster-karpenter
+spec:
+  selector:
+    matchLabels:
+      app: vcluster-karpenter
+  endpoints:
+    - port: metrics
+```
+
+**Key Metrics:**
+- `karpenter_nodes_total` - Total nodes managed
+- `karpenter_nodes_allocatable` - Allocatable resources
+- `karpenter_pods_state` - Pod scheduling state
+- `karpenter_interruption_received_messages` - Spot interruption notices
+- `karpenter_provisioner_scheduling_duration_seconds` - Provisioning time
+
+### Logs
+
+View provisioning decisions:
+
+```bash
+# Karpenter controller logs
+kubectl logs -n vcluster-my-vcluster <vcluster-pod> -c karpenter
+
+# Look for:
+# - "found provisionable pod(s)"
+# - "computed new machine(s) to fit pod(s)"
+# - "created machine"
+```
+
+### Dashboard
+
+Example Grafana dashboard:
+
+```json
+{
+  "dashboard": {
+    "title": "vCluster Auto Nodes",
+    "panels": [
+      {
+        "title": "Node Count",
+        "targets": [
+          {"expr": "sum(karpenter_nodes_total)"}
+        ]
+      },
+      {
+        "title": "CPU Utilization",
+        "targets": [
+          {"expr": "sum(karpenter_nodes_allocatable{resource_type='cpu'})"}
+        ]
+      },
+      {
+        "title": "Pending Pods",
+        "targets": [
+          {"expr": "sum(karpenter_pods_state{state='pending'})"}
+        ]
+      }
+    ]
+  }
+}
+```
+
+## Troubleshooting
+
+### Nodes Not Provisioning
+
+**Symptom:** Pods stay pending, no new nodes created
+
+```bash
+# Check Karpenter logs
+kubectl logs -n vcluster-my-vcluster <vcluster-pod> -c karpenter
+
+# Common issues:
+# 1. Limits reached
+# 2. No matching requirements
+# 3. Cloud provider API errors
+# 4. Insufficient permissions
+```
+
+**Solutions:**
+
+```bash
+# Check limits
+kubectl describe nodepool
+
+# Verify cloud credentials
+kubectl get secret -n vcluster-my-vcluster
+
+# Test cloud provider API access
+aws ec2 describe-instances  # AWS
+az vm list  # Azure
+gcloud compute instances list  # GCP
+```
+
+### Slow Provisioning
+
+**Symptom:** Nodes take too long to become ready
+
+```bash
+# Check provisioning time
+kubectl get machine -o yaml | grep provisioningTime
+
+# Typical times:
+# AWS: 2-3 minutes
+# Azure: 3-4 minutes
+# GCP: 2-3 minutes
+# Bare Metal: 5-10 minutes
+```
+
+**Optimization:**
+
+```yaml
+privateNodes:
+  autoNodes:
+    - name: default
+      enabled: true
+      
+      # Use AMI with pre-installed components
+      providerConfig:
+        amiFamily: Bottlerocket  # Optimized AMI
+        
+      # Reduce startup time
+      template:
+        spec:
+          startupTaints: []  # Remove startup taints if safe
+```
+
+### Excessive Churn
+
+**Symptom:** Nodes constantly being created/deleted
+
+```bash
+# Check consolidation settings
+kubectl describe nodepool
+
+# Monitor events
+kubectl get events --sort-by='.lastTimestamp' | grep -i node
+```
+
+**Solution:**
+
+```yaml
+privateNodes:
+  autoNodes:
+    - name: default
+      enabled: true
+      
+      # Reduce churn
+      ttlSecondsAfterEmpty: 300  # Wait longer before deleting
+      consolidation:
+        enabled: true
+        consolidateAfter: 300s  # Wait longer before consolidating
+```
+
+### Cost Overruns
+
+**Symptom:** Cloud bill higher than expected
+
+```bash
+# Check node count and types
+kubectl get nodes -o custom-columns=NAME:.metadata.name,INSTANCE-TYPE:.metadata.labels.node\\.kubernetes\\.io/instance-type
+
+# Check limits
+kubectl get nodepool -o yaml | grep -A5 limits
+```
+
+**Cost Controls:**
+
+```yaml
+privateNodes:
+  autoNodes:
+    - name: default
+      enabled: true
+      
+      # Strict limits
+      limits:
+        cpu: 100  # Hard cap
+        memory: 400Gi
+      
+      # Prefer cheap instances
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot"]  # Spot only
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: [t3.small, t3.medium]  # Small instances only
+      
+      # Aggressive cleanup
+      ttlSecondsAfterEmpty: 30
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Set Appropriate Limits" icon="gauge">
+    Always set limits to prevent runaway costs:
+
+    ```yaml
+    limits:
+      cpu: 1000
+      memory: 4000Gi
+      nvidia.com/gpu: 16  # If using GPUs
+    ```
+  </Accordion>
+
+  <Accordion title="Use Multiple Node Pools" icon="layer-group">
+    Separate workload types for better optimization:
+
+    ```yaml
+    autoNodes:
+      - name: general  # General workloads
+      - name: compute  # CPU-intensive
+      - name: memory   # Memory-intensive
+      - name: gpu      # GPU workloads
+    ```
+  </Accordion>
+
+  <Accordion title="Enable Consolidation" icon="compress">
+    Reduce costs by consolidating underutilized nodes:
+
+    ```yaml
+    consolidation:
+      enabled: true
+    ```
+  </Accordion>
+
+  <Accordion title="Monitor Provisioning" icon="chart-line">
+    Set up alerts for provisioning failures:
+
+    ```yaml
+    # Alert when pods are pending too long
+    alert: PodsPendingTooLong
+    expr: karpenter_pods_state{state="pending"} > 0 for 10m
+    ```
+  </Accordion>
+
+  <Accordion title="Test with Spot Instances" icon="coins">
+    Use spot/preemptible for non-critical workloads:
+
+    ```yaml
+    requirements:
+      - key: karpenter.sh/capacity-type
+        operator: In
+        values: ["spot", "on-demand"]
+    ```
+  </Accordion>
+
+  <Accordion title="Plan for Interruptions" icon="bolt">
+    Handle spot instance interruptions:
+
+    ```yaml
+    # Use node termination handler
+    # PodDisruptionBudgets
+    # Multiple replicas
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Comparison
+
+### Auto Nodes vs Manual Provisioning
+
+| Aspect | Manual | Auto Nodes |
+|--------|:------:|:----------:|
+| Setup Time | Hours | Minutes |
+| Scaling | Manual | Automatic |
+| Cost Optimization | Limited | Excellent |
+| Operational Overhead | High | Low |
+| Flexibility | High | Very High |
+| Complexity | Low | Medium |
+
+### Auto Nodes vs Cluster Autoscaler
+
+| Aspect | Cluster Autoscaler | Auto Nodes |
+|--------|:------------------:|:----------:|
+| Provisioning Speed | Slower | Faster |
+| Bin Packing | Basic | Advanced |
+| Cost Optimization | Good | Better |
+| GPU Support | Limited | Excellent |
+| Multi-Cloud | Limited | Yes |
+| Bare Metal | No | Yes |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Private Nodes" icon="shield" href="/architecture/private-nodes">
+    Learn about the foundation for Auto Nodes.
+  </Card>
+  <Card title="Cost Optimization" icon="piggy-bank" href="/vcluster/manage/cost-optimization">
+    Advanced cost optimization strategies.
+  </Card>
+  <Card title="GPU Workloads" icon="microchip" href="/vcluster/use-cases/gpu-workloads">
+    Running GPU workloads with auto-scaling.
+  </Card>
+  <Card title="Node Configuration" icon="sliders" href="/vcluster/configure/vcluster-yaml/private-nodes/auto-nodes">
+    Complete Auto Nodes configuration reference.
+  </Card>
+</CardGroup>

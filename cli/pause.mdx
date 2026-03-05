@@ -1,0 +1,82 @@
+---
+title: "vcluster pause"
+description: "Pause a running virtual cluster to save resources"
+---
+
+## Synopsis
+
+Pauses a running virtual cluster to save resources.
+
+```bash
+vcluster pause VCLUSTER_NAME [flags]
+```
+
+## Description
+
+The `pause` command puts a virtual cluster into sleep mode, scaling down control plane components to save CPU and memory. This is useful for development and staging environments that don't need to run 24/7.
+
+## Examples
+
+```bash
+# Pause a vCluster
+vcluster pause my-vcluster --namespace team-x
+
+# Pause with specific driver
+vcluster pause my-vcluster -n team-x --driver helm
+
+# Pause without preventing wake-up (Platform only)
+vcluster pause my-vcluster -n team-x --prevent-wakeup=false
+```
+
+## Flags
+
+<ParamField path="--namespace" type="string" required>
+  The Kubernetes namespace where the vCluster is running.
+</ParamField>
+
+<ParamField path="--driver" type="string" default="helm">
+  The driver to use. Options: `helm`, `platform`.
+</ParamField>
+
+<ParamField path="--prevent-wakeup" type="boolean" default="true">
+  [PLATFORM] Prevent automatic wakeup.
+</ParamField>
+
+<ParamField path="--project" type="string">
+  [PLATFORM] The project name.
+</ParamField>
+
+## How It Works
+
+When you pause a vCluster:
+
+1. **Control plane scales down** - StatefulSet replicas set to 0
+2. **Workloads remain** - Synced pods continue running in host cluster
+3. **State preserved** - etcd/database data persists
+4. **Resources freed** - CPU and memory released
+
+<Note>
+Paused vClusters cannot be accessed via kubectl. You must resume them first.
+</Note>
+
+## Complete Example
+
+```bash
+# Check current status
+vcluster list
+
+# Pause the vCluster
+vcluster pause dev-vcluster -n development
+
+# Verify it's paused
+vcluster list
+# Should show Status: Paused
+
+# Later, resume it
+vcluster resume dev-vcluster -n development
+```
+
+## See Also
+
+- [vcluster resume](/cli/resume) - Resume a paused vCluster
+- [Pause/Resume Operations](/operations/pause-resume) - Detailed guide

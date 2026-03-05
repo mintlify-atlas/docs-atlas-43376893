@@ -1,0 +1,328 @@
+---
+title: GPU Platforms
+description: Maximize GPU utilization with isolated, self-service Kubernetes environments for AI/ML teams
+---
+
+## The Challenge
+
+GPU infrastructure is expensive and complex to share:
+
+- **Low GPU utilization** - Teams reserve GPUs but don't use them efficiently
+- **No isolation** - Shared namespaces lack proper security boundaries for multi-tenant GPU access
+- **Slow provisioning** - Setting up new environments takes days or weeks
+- **Workload conflicts** - Different teams need different schedulers, drivers, or CUDA versions
+
+## How vCluster Solves It
+
+vCluster enables **efficient GPU multi-tenancy** by providing:
+
+- **Isolated Kubernetes clusters** on shared GPU infrastructure
+- **Self-service provisioning** - Spin up new environments in seconds
+- **Custom schedulers per tenant** - Use Karpenter, Volcano, or multiple schedulers simultaneously
+- **Dedicated or shared GPU nodes** - Flexible architecture that scales from dev to production
+
+## Real-World Examples
+
+### GPU Cloud Providers
+
+**CoreWeave** uses vCluster to provide managed Kubernetes for GPU workloads at scale. Each customer gets a fully isolated virtual cluster with dedicated GPU nodes.
+
+### Internal GPU Platforms
+
+Companies like **NVIDIA** use vCluster to maximize GPU utilization across AI/ML teams while maintaining strong isolation. Data scientists get self-service access without waiting for cluster admins.
+
+### AI Factory (On-Premises)
+
+Run AI workloads on-premises where your data lives. vCluster provides multi-tenant Kubernetes for training, fine-tuning, and inference workloads on bare metal GPU servers.
+
+## Recommended Configuration
+
+### Shared GPU Nodes (Development)
+
+Maximize utilization for dev/test workloads:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        all: true  # Access all GPU nodes
+      clearImageStatus: true  # Hide host images
+  toHost:
+    pods:
+      enforceTolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+
+controlPlane:
+  distro:
+    k8s:
+      enabled: true
+      scheduler:
+        enabled: true  # Enable virtual scheduler for GPU scheduling
+
+integrations:
+  metricsServer:
+    enabled: true
+```
+
+### Dedicated GPU Nodes (Production)
+
+Isolate production workloads on labeled GPU nodes:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true
+      selector:
+        labels:
+          gpu-tenant: ml-team-alpha
+          nvidia.com/gpu: "true"
+  toHost:
+    pods:
+      enforceTolerations:
+        - key: gpu-tenant
+          operator: Equal
+          value: ml-team-alpha
+          effect: NoSchedule
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.nvidia.com/gpu: 4
+      limits.nvidia.com/gpu: 4
+```
+
+### Private GPU Nodes (Maximum Isolation)
+
+External GPU nodes with full CNI/CSI isolation:
+
+```yaml
+privateNodes:
+  enabled: true
+  kubelet:
+    config:
+      featureGates:
+        DevicePlugins: true
+
+controlPlane:
+  service:
+    spec:
+      type: LoadBalancer  # Or NodePort for external access
+  distro:
+    k8s:
+      enabled: true
+      scheduler:
+        enabled: true
+
+autoNodes:
+  enabled: false  # Manual node management for GPU nodes
+```
+
+### Hybrid Scheduling for AI/ML
+
+Use multiple schedulers for different workload types:
+
+```yaml
+controlPlane:
+  distro:
+    k8s:
+      enabled: true
+      scheduler:
+        enabled: true
+
+sync:
+  toHost:
+    pods:
+      hybridScheduling:
+        enabled: true
+        hostSchedulers:
+          - volcano
+          - karpenter
+```
+
+Then specify the scheduler in your workload:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: training-job
+spec:
+  schedulerName: volcano  # Use host cluster's Volcano scheduler
+  containers:
+    - name: trainer
+      image: pytorch/pytorch:latest
+      resources:
+        limits:
+          nvidia.com/gpu: 2
+```
+
+## Best Practices
+
+### 1. Label GPU Nodes
+
+Organize GPU infrastructure by tenant, GPU type, or workload:
+
+```bash
+# Label by tenant
+kubectl label nodes gpu-node-1 gpu-node-2 gpu-tenant=ml-team-a
+
+# Label by GPU type
+kubectl label nodes gpu-node-1 gpu-type=a100
+kubectl label nodes gpu-node-2 gpu-type=h100
+
+# Label by workload
+kubectl label nodes gpu-node-3 workload=training
+kubectl label nodes gpu-node-4 workload=inference
+```
+
+### 2. Configure GPU Resource Quotas
+
+Prevent GPU hoarding:
+
+```yaml
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.nvidia.com/gpu: 8
+      limits.nvidia.com/gpu: 8
+      requests.cpu: 64
+      requests.memory: 512Gi
+```
+
+### 3. Enable Node Auto-Scaling (Cloud)
+
+For cloud GPU infrastructure, use Auto Nodes with Karpenter:
+
+```yaml
+privateNodes:
+  enabled: true
+  autoNodes:
+    - name: gpu-pool
+      provider: aws
+      config:
+        instanceType: p4d.24xlarge
+        amiFamily: AL2
+        userData: |
+          #!/bin/bash
+          # Install NVIDIA drivers
+          /usr/local/nvidia-installer/nvidia-installer.sh
+
+autoNodes:
+  enabled: true
+  nodeProvider: karpenter
+```
+
+### 4. Use Node Affinity for GPU Selection
+
+Route workloads to specific GPU types:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inference-server
+spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: gpu-type
+                operator: In
+                values:
+                  - h100
+  containers:
+    - name: server
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+```
+
+### 5. Implement GPU Monitoring
+
+Track GPU utilization and costs:
+
+```yaml
+controlPlane:
+  serviceMonitor:
+    enabled: true
+    labels:
+      team: ml-team-alpha
+      workload: training
+
+integrations:
+  metricsServer:
+    enabled: true
+    nodes: true
+```
+
+### 6. Configure Time-Slicing (Optional)
+
+For dev environments, share GPUs using NVIDIA time-slicing:
+
+```yaml
+sync:
+  fromHost:
+    configMaps:
+      enabled: true
+      mappings:
+        byName:
+          "kube-system/nvidia-device-plugin-config": "kube-system/nvidia-device-plugin-config"
+```
+
+### 7. Enable Sleep Mode for Cost Savings
+
+Automatically pause idle GPU clusters (requires vCluster Platform):
+
+```yaml
+# Configured via vCluster Platform UI or API
+sleep:
+  afterInactivity: 1h  # Sleep after 1 hour of inactivity
+  deleteAfter: 168h    # Delete after 7 days of sleep
+```
+
+## Architecture Comparison
+
+| Architecture | GPU Access | Isolation | Use Case |
+|--------------|------------|-----------|----------|
+| **Shared Nodes** | Host GPU drivers | Namespace-level | Dev/test, experimentation |
+| **Dedicated Nodes** | Host GPU drivers | Node-level | Production training |
+| **Private Nodes** | Virtual cluster GPU drivers | Full CNI/CSI | Compliance, multi-cloud |
+
+## Cost Optimization
+
+### Sleep Mode
+
+Automatically pause inactive GPU clusters to reduce costs. GPU-intensive workloads can be expensive when idle.
+
+### Bin Packing
+
+Use shared nodes architecture to maximize GPU utilization across multiple teams during development.
+
+### Auto-Scaling
+
+Dynamically provision GPU nodes only when needed:
+
+```yaml
+autoNodes:
+  enabled: true
+  nodeProvider: karpenter
+```
+
+## Related Resources
+
+- [GPU Cloud Providers Solution](https://www.vcluster.com/solutions/gpu-cloud-providers)
+- [Internal GPU Platform Solution](https://www.vcluster.com/solutions/internal-gpu-platform)
+- [Hybrid Scheduling](/vcluster/deploy/hybrid-scheduling)
+- [Private Nodes Architecture](/vcluster/deploy/worker-nodes/private-nodes)
+- [Auto Nodes](/vcluster/deploy/worker-nodes/private-nodes/auto-nodes)

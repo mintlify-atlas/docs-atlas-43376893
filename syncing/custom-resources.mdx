@@ -1,0 +1,510 @@
+---
+title: Custom Resource Syncing
+description: Sync Custom Resource Definitions (CRDs) between virtual and host clusters
+---
+
+In addition to native Kubernetes resources, vCluster can sync Custom Resources (CRs) between the virtual and host clusters. This is essential when using operators or custom controllers that extend Kubernetes functionality.
+
+## Overview
+
+vCluster supports syncing custom resources through two mechanisms:
+
+1. **Built-in integrations** for popular operators (cert-manager, ExternalSecrets, Istio, KubeVirt)
+2. **Generic custom resource syncing** via plugins or experimental proxy feature
+
+## Built-in Integrations
+
+vCluster includes native support for several popular CRD ecosystems.
+
+### External Secrets Operator
+
+Reuses a host cluster's External Secrets Operator installation:
+
+```yaml
+integrations:
+  externalSecrets:
+    enabled: true
+    webhook:
+      enabled: false
+    sync:
+      toHost:
+        externalSecrets:
+          selector:
+            matchLabels: {}
+        stores:
+          enabled: false
+          selector:
+            matchLabels: {}
+      fromHost:
+        clusterStores:
+          enabled: false
+          selector:
+            matchLabels: {}
+```
+
+**What gets synced:**
+- `ExternalSecrets` → Virtual to Host (with label selector)
+- `SecretStores` → Virtual to Host, then bidirectional (optional)
+- `ClusterSecretStores` → Host to Virtual (optional)
+
+**Example configuration:**
+
+```yaml
+integrations:
+  externalSecrets:
+    enabled: true
+    webhook:
+      enabled: true  # Reuse host webhooks
+    sync:
+      toHost:
+        externalSecrets:
+          selector:
+            matchLabels:
+              sync: "true"  # Only sync labeled ExternalSecrets
+      fromHost:
+        clusterStores:
+          enabled: true  # Import ClusterSecretStores
+```
+
+### Cert-Manager
+
+Reuses a host cluster's cert-manager installation:
+
+```yaml
+integrations:
+  certManager:
+    enabled: true
+    sync:
+      toHost:
+        certificates:
+          enabled: true
+        issuers:
+          enabled: true
+      fromHost:
+        clusterIssuers:
+          enabled: true
+          selector:
+            labels: {}
+```
+
+**What gets synced:**
+- `Certificates` → Virtual to Host
+- `Issuers` → Virtual to Host
+- `ClusterIssuers` → Host to Virtual (read-only)
+
+**Example configuration:**
+
+```yaml
+integrations:
+  certManager:
+    enabled: true
+    sync:
+      toHost:
+        certificates:
+          enabled: true
+        issuers:
+          enabled: true
+      fromHost:
+        clusterIssuers:
+          enabled: true
+          selector:
+            labels:
+              vcluster-accessible: "true"
+```
+
+### Istio
+
+Syncs Istio resources from virtual to host:
+
+```yaml
+integrations:
+  istio:
+    enabled: true
+    sync:
+      toHost:
+        destinationRules:
+          enabled: true
+        gateways:
+          enabled: true
+        virtualServices:
+          enabled: true
+```
+
+**What gets synced:**
+- `DestinationRules` → Virtual to Host
+- `Gateways` → Virtual to Host
+- `VirtualServices` → Virtual to Host
+
+### KubeVirt
+
+Reuses a host cluster's KubeVirt installation:
+
+```yaml
+integrations:
+  kubeVirt:
+    enabled: true
+    webhook:
+      enabled: true
+    sync:
+      virtualMachines:
+        enabled: true
+      virtualMachineInstances:
+        enabled: true
+      virtualMachinePools:
+        enabled: true
+      virtualMachineClones:
+        enabled: true
+      virtualMachineInstanceMigrations:
+        enabled: true
+      dataVolumes:
+        enabled: false
+```
+
+## Generic Custom Resource Syncing
+
+For custom resources not covered by built-in integrations, you have two options:
+
+### Option 1: Experimental Proxy Feature
+
+The experimental proxy feature allows syncing arbitrary custom resources:
+
+```yaml
+experimental:
+  proxy:
+    customResources:
+      # Format: "kind.apiGroup/version"
+      "MyCRD.example.com/v1":
+        enabled: true
+        direction: toHost  # or fromHost, or bidirectional
+```
+
+**Note:** This feature is experimental and may change in future versions.
+
+### Option 2: vCluster Plugins
+
+vCluster plugins provide the most flexible way to sync custom resources. Plugins are external binaries that extend vCluster's syncing capabilities.
+
+**Plugin configuration:**
+
+```yaml
+plugins:
+  my-plugin:
+    image: my-registry/vcluster-plugin:latest
+    # Plugin-specific configuration
+    config:
+      # ...
+```
+
+**Creating a plugin:**
+
+Plugins must implement the vCluster plugin SDK. See the [vCluster SDK documentation](https://github.com/loft-sh/vcluster-sdk) for details on building plugins.
+
+## Syncing Architecture
+
+### Generic Syncer Pattern
+
+Custom resource syncing follows the same pattern as native resources. Each syncer implements the `Syncer` interface (`pkg/syncer/types/syncer.go:20`):
+
+```go
+type Syncer interface {
+    Object
+    synccontext.Mapper
+    Syncer() Sync[client.Object]
+}
+
+type Sync[T client.Object] interface {
+    SyncToHost(ctx *synccontext.SyncContext, event *synccontext.SyncToHostEvent[T]) (ctrl.Result, error)
+    Sync(ctx *synccontext.SyncContext, event *synccontext.SyncEvent[T]) (ctrl.Result, error)
+    SyncToVirtual(ctx *synccontext.SyncContext, event *synccontext.SyncToVirtualEvent[T]) (ctrl.Result, error)
+}
+```
+
+### Name Translation
+
+Custom resources synced to the host cluster use the same name translation as native resources:
+
+```
+Virtual: my-certificate (namespace: default)
+Host:    my-vcluster-default-my-certificate-x-default-x-my-vcluster
+```
+
+Annotations track the relationship:
+```yaml
+annotations:
+  vcluster.loft.sh/name: my-certificate
+  vcluster.loft.sh/namespace: default
+  vcluster.loft.sh/uid: "abc123..."
+  vcluster.loft.sh/kind: "certificates.cert-manager.io/v1"
+```
+
+## Configuration Examples
+
+### Complete Cert-Manager Setup
+
+```yaml
+integrations:
+  certManager:
+    enabled: true
+    sync:
+      toHost:
+        certificates:
+          enabled: true
+        issuers:
+          enabled: true
+      fromHost:
+        clusterIssuers:
+          enabled: true
+          selector:
+            labels:
+              # Only import ClusterIssuers with this label
+              vcluster.loft.sh/allowed: "true"
+```
+
+**Usage in virtual cluster:**
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: my-app-tls
+  namespace: default
+spec:
+  secretName: my-app-tls
+  issuerRef:
+    name: letsencrypt-prod  # ClusterIssuer from host
+    kind: ClusterIssuer
+  dnsNames:
+    - my-app.example.com
+```
+
+### Complete ExternalSecrets Setup
+
+```yaml
+integrations:
+  externalSecrets:
+    enabled: true
+    webhook:
+      enabled: true
+    sync:
+      toHost:
+        externalSecrets:
+          selector:
+            matchLabels:
+              sync-to-host: "true"
+        stores:
+          enabled: true
+          selector:
+            matchLabels: {}
+      fromHost:
+        clusterStores:
+          enabled: true
+          selector:
+            matchLabels: {}
+```
+
+**Usage in virtual cluster:**
+
+```yaml
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: my-secret
+  namespace: default
+  labels:
+    sync-to-host: "true"  # Required for sync
+spec:
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: my-app-secret
+  data:
+    - secretKey: api-key
+      remoteRef:
+        key: /secret/data/api-key
+```
+
+### Istio Service Mesh Setup
+
+```yaml
+integrations:
+  istio:
+    enabled: true
+    sync:
+      toHost:
+        destinationRules:
+          enabled: true
+        gateways:
+          enabled: true
+        virtualServices:
+          enabled: true
+```
+
+**Usage in virtual cluster:**
+
+```yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: my-service
+  namespace: default
+spec:
+  hosts:
+    - my-service.example.com
+  gateways:
+    - my-gateway
+  http:
+    - route:
+        - destination:
+            host: my-service
+            port:
+              number: 80
+```
+
+## Requirements
+
+### CRDs Must Exist in Host Cluster
+
+For custom resource syncing to work, the CRDs must be installed in the host cluster. vCluster does not install CRDs automatically.
+
+**Example: Installing cert-manager CRDs in host cluster:**
+
+```bash
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.crds.yaml
+```
+
+### RBAC Permissions
+
+vCluster needs appropriate RBAC permissions to read and write custom resources. These permissions are typically added automatically when using built-in integrations.
+
+**Manual RBAC configuration (if needed):**
+
+```yaml
+rbac:
+  clusterRole:
+    enabled: true
+    extraRules:
+      - apiGroups: ["cert-manager.io"]
+        resources: ["certificates", "issuers"]
+        verbs: ["create", "delete", "patch", "update", "get", "list", "watch"]
+      - apiGroups: ["cert-manager.io"]
+        resources: ["clusterissuers"]
+        verbs: ["get", "list", "watch"]
+```
+
+## Troubleshooting
+
+### Custom Resources Not Syncing
+
+1. **Verify integration is enabled:**
+   ```bash
+   helm get values my-vcluster -n vcluster-my-vcluster | grep -A 10 integrations
+   ```
+
+2. **Check CRDs exist in host cluster:**
+   ```bash
+   kubectl get crd certificates.cert-manager.io
+   ```
+
+3. **Verify RBAC permissions:**
+   ```bash
+   kubectl get clusterrole vc-my-vcluster -o yaml
+   ```
+
+4. **Check vCluster logs:**
+   ```bash
+   kubectl logs -n vcluster-my-vcluster deploy/my-vcluster -f | grep -i certificate
+   ```
+
+### Webhooks Not Working
+
+If using custom resource webhooks:
+
+1. **Enable webhook integration:**
+   ```yaml
+   integrations:
+     externalSecrets:
+       webhook:
+         enabled: true
+   ```
+
+2. **Verify webhook service exists:**
+   ```bash
+   kubectl get svc -A | grep webhook
+   ```
+
+3. **Check ValidatingWebhookConfiguration:**
+   ```bash
+   kubectl get validatingwebhookconfiguration
+   ```
+
+### Label Selectors Not Matching
+
+When using label selectors, ensure resources have the required labels:
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: my-cert
+  labels:
+    sync-to-host: "true"  # Must match selector
+```
+
+## Advanced Configuration
+
+### Selective Syncing with Labels
+
+Use label selectors to control which resources sync:
+
+```yaml
+integrations:
+  certManager:
+    enabled: true
+    sync:
+      fromHost:
+        clusterIssuers:
+          enabled: true
+          selector:
+            labels:
+              environment: production
+              vcluster-allowed: "true"
+```
+
+### Bidirectional Syncing
+
+Some resources support bidirectional syncing (e.g., SecretStores):
+
+```yaml
+integrations:
+  externalSecrets:
+    enabled: true
+    sync:
+      toHost:
+        stores:
+          enabled: true  # Sync to host, then sync status back
+```
+
+## Best Practices
+
+1. **Install CRDs first**: Ensure CRDs exist in the host cluster before enabling syncing
+2. **Use label selectors**: Control which resources sync to avoid conflicts
+3. **Start with read-only**: Import ClusterIssuers/ClusterStores before syncing user resources
+4. **Monitor RBAC**: Ensure vCluster has necessary permissions
+5. **Test thoroughly**: Validate custom resource syncing in development before production
+6. **Document dependencies**: Keep track of which operators are required in the host cluster
+
+## Limitations
+
+1. **CRDs must pre-exist**: vCluster doesn't install CRDs in the host cluster
+2. **No CRD syncing**: The CRD definitions themselves are not synced
+3. **Webhook complexity**: Some webhooks may require additional configuration
+4. **Version compatibility**: Ensure CRD versions match between virtual and host clusters
+5. **Cluster-scoped resources**: Limited support for cluster-scoped custom resources
+
+## Next Steps
+
+- Review [syncing overview](/syncing/overview)
+- Learn about [to-host syncing](/syncing/to-host)
+- Learn about [from-host syncing](/syncing/from-host)
+- Explore [integrations](/integrations/overview)

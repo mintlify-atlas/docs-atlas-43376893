@@ -1,0 +1,315 @@
+---
+title: Multi-Tenancy Isolation
+description: Understanding vCluster's isolation model and security boundaries
+---
+
+vCluster provides multiple layers of isolation to enable secure multi-tenancy within Kubernetes clusters. This page explains the isolation guarantees and security boundaries that vCluster enforces.
+
+## Isolation Architecture
+
+vCluster creates isolated virtual Kubernetes clusters by running a separate control plane for each tenant. Each vCluster has its own:
+
+- **API Server**: Dedicated Kubernetes API server instance
+- **Controller Manager**: Separate controller manager for resource reconciliation
+- **Data Store**: Isolated etcd or database backend
+- **Scheduler**: Optional dedicated scheduler for advanced workload placement
+
+### Control Plane Isolation
+
+Each vCluster operates with complete control plane isolation:
+
+```yaml
+# Each vCluster runs its own API server
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vcluster-api-server
+spec:
+  containers:
+  - name: vcluster
+    image: loftsh/vcluster
+    # Isolated API server per virtual cluster
+```
+
+The control plane isolation ensures that:
+
+- Virtual clusters cannot access each other's API servers
+- Resource definitions remain isolated between tenants
+- RBAC policies are enforced independently per vCluster
+- Audit logs are separated per virtual cluster
+
+## Deployment Models
+
+vCluster supports multiple deployment architectures with different isolation levels:
+
+### Standard Mode
+
+In standard mode, vCluster runs within a host cluster namespace. Workloads are scheduled on host cluster nodes with namespace-level isolation.
+
+**Isolation guarantees:**
+- Separate API server per vCluster
+- Namespace isolation in the host cluster
+- Synced resources are name-mangled to prevent conflicts
+- Network policies can enforce pod-level isolation
+
+### Isolated Mode
+
+Isolated mode provides enhanced isolation by restricting syncing and enforcing stricter security boundaries:
+
+```yaml
+controlPlane:
+  advanced:
+    workloadServiceAccount:
+      name: custom-sa
+    isolatedControlPlane:
+      enabled: true
+```
+
+**Enhanced guarantees:**
+- Reduced host cluster RBAC permissions
+- Limited resource syncing to host cluster
+- Stricter pod security standards enforcement
+- Optional network policy isolation
+
+### Private Nodes (v0.27+)
+
+Private nodes provide full CNI/CSI isolation by allowing external nodes to join the virtual cluster directly:
+
+**Full isolation features:**
+- Dedicated CNI stack per vCluster
+- Separate CSI drivers and storage backends
+- Complete network isolation from host cluster
+- Independent node lifecycle management
+
+### Standalone Mode
+
+Standalone vCluster runs without a host cluster, deployed directly on bare metal or VMs:
+
+```yaml
+controlPlane:
+  standalone:
+    enabled: true
+```
+
+**Highest isolation level:**
+- No shared infrastructure with other clusters
+- Complete control plane independence
+- Isolated networking stack
+- Independent certificate authorities
+
+## Resource Syncing and Isolation
+
+vCluster maintains isolation while syncing resources between virtual and host clusters:
+
+### Name Mangling
+
+Resources synced to the host cluster are automatically renamed to prevent conflicts:
+
+```yaml
+# Virtual cluster resource
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-app
+  namespace: production
+
+# Synced to host as:
+# name: my-app-x-production-x-vcluster-name
+# namespace: vcluster-host-namespace
+```
+
+This ensures:
+- Multiple vClusters can have resources with the same names
+- No resource conflicts between tenants
+- Transparent translation for users
+
+### Selective Syncing
+
+Configure which resources sync to the host cluster:
+
+```yaml
+sync:
+  toHost:
+    pods:
+      enabled: true
+    services:
+      enabled: true
+    persistentVolumeClaims:
+      enabled: true
+    # Other resources isolated to virtual cluster
+    secrets:
+      enabled: false
+    configMaps:
+      enabled: false
+```
+
+## Pod Security
+
+vCluster enforces pod security standards on virtual cluster namespaces:
+
+```go
+// From pkg/controllers/podsecurity/podsecurity.go
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    // Apply pod security standard labels to namespaces
+    labels[api.EnforceLevelLabel] = r.PodSecurityStandard
+    labels[api.EnforceVersionLabel] = api.VersionLatest
+    // ...
+}
+```
+
+Configure pod security standards:
+
+```yaml
+policies:
+  podSecurityStandard: restricted  # baseline, restricted, or privileged
+```
+
+## Network Isolation
+
+vCluster supports network policies to isolate workload traffic:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      publicEgress:
+        enabled: true
+        cidr: 0.0.0.0/0
+        except:
+          - 169.254.169.254/32  # Block metadata service
+```
+
+See [Network Policies](/security/network-policies) for detailed configuration.
+
+## Authentication and Authorization Isolation
+
+vCluster implements delegating authentication and authorization:
+
+```go
+// From pkg/authentication/delegatingauthenticator/delegatingauthenticator.go
+func (d *delegatingAuthenticator) AuthenticateToken(ctx context.Context, token string) (*authenticator.Response, bool, error) {
+    tokReview := &authenticationv1.TokenReview{
+        Spec: authenticationv1.TokenReviewSpec{
+            Token: token,
+        },
+    }
+    err := d.client.Create(ctx, tokReview)
+    // Validate token against host cluster
+}
+```
+
+This ensures:
+- Tokens are validated against the host cluster
+- Each vCluster maintains its own RBAC policies
+- Users are authenticated once and authorized per-vCluster
+- Impersonation requests are properly delegated
+
+## Best Practices
+
+### Enable Network Policies
+
+Always enable network policies in production:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+```
+
+### Use Restricted Pod Security Standard
+
+Enforce the most restrictive security standard appropriate for your workloads:
+
+```yaml
+policies:
+  podSecurityStandard: restricted
+```
+
+### Limit Resource Syncing
+
+Only sync resources that need to run in the host cluster:
+
+```yaml
+sync:
+  toHost:
+    # Explicitly enable only required resources
+    secrets:
+      enabled: false  # Keep secrets isolated
+```
+
+### Use ServiceAccount Token Projection
+
+Enable token projection for enhanced security:
+
+```yaml
+controlPlane:
+  advanced:
+    serviceAccount:
+      tokenProjection:
+        enabled: true
+```
+
+### Separate Administrative Access
+
+Use different credentials for host cluster and vCluster access:
+
+```bash
+# Access host cluster
+kubectl --context=host-cluster get pods
+
+# Access vCluster (isolated)
+vcluster connect my-vcluster
+kubectl get pods
+```
+
+## Security Boundaries
+
+Understand the security boundaries of vCluster:
+
+### What vCluster Isolates
+
+- API server access and authentication
+- RBAC policies and role bindings
+- Custom resource definitions (optional)
+- Namespace resources within the virtual cluster
+- Control plane configuration
+
+### What vCluster Shares
+
+- Host cluster nodes (in standard mode)
+- Container runtime (shared kernel)
+- Host cluster network (unless using private nodes)
+- Storage classes from host cluster
+- Node-level resources (CPU, memory, disk)
+
+### Kernel-Level Considerations
+
+vCluster does not provide kernel-level isolation. Workloads share the host kernel:
+
+- Use container security contexts for additional isolation
+- Consider using gVisor or Kata Containers for kernel-level isolation
+- Apply AppArmor or SELinux policies
+- Use seccomp profiles to restrict syscalls
+
+## Monitoring Isolation
+
+Monitor isolation boundaries:
+
+```bash
+# Check network policies are applied
+kubectl get networkpolicies -n vcluster-namespace
+
+# Verify pod security standards
+kubectl get ns -l pod-security.kubernetes.io/enforce
+
+# Audit resource syncing
+vcluster list --namespace vcluster-namespace
+```
+
+## Further Reading
+
+- [RBAC Configuration](/security/rbac)
+- [Network Policies](/security/network-policies)
+- [Certificate Management](/security/certificates)
+- [Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/)

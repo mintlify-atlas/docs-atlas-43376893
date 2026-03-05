@@ -1,0 +1,327 @@
+---
+title: Helm Installation
+description: Install vCluster using Helm charts for production deployments
+---
+
+This guide walks you through installing vCluster using Helm, the recommended method for production deployments.
+
+## Prerequisites
+
+Before installing vCluster, ensure you have:
+
+- **Kubernetes 1.18+** cluster (host cluster)
+- **Helm 3.10.0+** installed locally
+- **kubectl** configured to access your host cluster
+- Appropriate permissions to create namespaces and cluster-scoped resources
+
+## Installation Methods
+
+### Quick Installation
+
+For a basic vCluster installation with default settings:
+
+<Steps>
+  <Step title="Add the Helm Repository">
+    Add the Loft.sh Helm repository to your Helm client:
+    
+    ```bash
+    helm repo add loft-sh https://charts.loft.sh
+    helm repo update
+    ```
+  </Step>
+
+  <Step title="Install vCluster">
+    Install vCluster in a new namespace:
+    
+    ```bash
+    helm upgrade --install my-vcluster loft-sh/vcluster \
+      --namespace vcluster-my-vcluster \
+      --create-namespace
+    ```
+    
+    This creates a virtual cluster named `my-vcluster` in the `vcluster-my-vcluster` namespace.
+  </Step>
+
+  <Step title="Verify Installation">
+    Check that the vCluster pod is running:
+    
+    ```bash
+    kubectl get pods -n vcluster-my-vcluster
+    ```
+    
+    You should see output similar to:
+    ```
+    NAME              READY   STATUS    RESTARTS   AGE
+    my-vcluster-0     1/1     Running   0          2m
+    ```
+  </Step>
+</Steps>
+
+### Custom Installation with Values
+
+For production deployments, create a custom `values.yaml` file:
+
+<Steps>
+  <Step title="Create Values File">
+    Create a `values.yaml` file with your configuration:
+    
+    ```yaml values.yaml
+    # Enable high availability
+    controlPlane:
+      statefulSet:
+        highAvailability:
+          replicas: 3
+        
+        # Resource limits for production
+        resources:
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+          requests:
+            cpu: 500m
+            memory: 1Gi
+        
+        # Persistent storage
+        persistence:
+          volumeClaim:
+            enabled: true
+            size: 10Gi
+            storageClass: "fast-ssd"
+      
+      # Use external etcd for better performance
+      backingStore:
+        etcd:
+          deploy:
+            enabled: true
+            statefulSet:
+              highAvailability:
+                replicas: 3
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 512Mi
+              persistence:
+                volumeClaim:
+                  enabled: true
+                  size: 10Gi
+    
+    # Configure resource syncing
+    sync:
+      toHost:
+        pods:
+          enabled: true
+        services:
+          enabled: true
+        persistentVolumeClaims:
+          enabled: true
+    ```
+  </Step>
+
+  <Step title="Install with Custom Values">
+    Install vCluster using your custom configuration:
+    
+    ```bash
+    helm upgrade --install my-vcluster loft-sh/vcluster \
+      --namespace vcluster-my-vcluster \
+      --create-namespace \
+      --values values.yaml
+    ```
+  </Step>
+
+  <Step title="Verify Configuration">
+    Verify that your custom settings were applied:
+    
+    ```bash
+    # Check the number of replicas
+    kubectl get statefulset -n vcluster-my-vcluster
+    
+    # Check the etcd pods
+    kubectl get pods -n vcluster-my-vcluster -l app=vcluster-etcd
+    ```
+  </Step>
+</Steps>
+
+## Connecting to vCluster
+
+After installation, connect to your vCluster using the vCluster CLI:
+
+<Steps>
+  <Step title="Install vCluster CLI (if not already installed)">
+    ```bash
+    # macOS / Linux
+    curl -L -o vcluster "https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-$(uname -s)-$(uname -m)"
+    chmod +x vcluster
+    sudo mv vcluster /usr/local/bin
+    ```
+  </Step>
+
+  <Step title="Connect to vCluster">
+    ```bash
+    vcluster connect my-vcluster -n vcluster-my-vcluster
+    ```
+    
+    This command:
+    - Establishes a port-forward to the vCluster
+    - Updates your kubeconfig to include the vCluster context
+    - Switches to the vCluster context
+  </Step>
+
+  <Step title="Verify Connection">
+    Test that you're connected to the virtual cluster:
+    
+    ```bash
+    kubectl get namespaces
+    ```
+    
+    You should see the default namespaces of a fresh Kubernetes cluster.
+  </Step>
+</Steps>
+
+## Installation Options
+
+### Kubernetes Distribution Selection
+
+vCluster supports different Kubernetes distributions. By default, it uses K3s, but you can configure vanilla Kubernetes:
+
+```yaml
+controlPlane:
+  distro:
+    k8s:
+      enabled: true
+      version: "v1.35.0"
+      image:
+        registry: ghcr.io
+        repository: "loft-sh/kubernetes"
+        tag: "v1.35.0"
+```
+
+### Backing Store Options
+
+vCluster supports multiple backing store configurations:
+
+#### Embedded Database (Default)
+```yaml
+controlPlane:
+  backingStore:
+    database:
+      embedded:
+        enabled: true
+```
+
+#### Embedded etcd
+```yaml
+controlPlane:
+  backingStore:
+    etcd:
+      embedded:
+        enabled: true
+```
+
+#### Deployed etcd (Recommended for Production)
+```yaml
+controlPlane:
+  backingStore:
+    etcd:
+      deploy:
+        enabled: true
+        statefulSet:
+          highAvailability:
+            replicas: 3
+```
+
+#### External Database
+```yaml
+controlPlane:
+  backingStore:
+    database:
+      external:
+        enabled: true
+        dataSource: "postgres://username:password@hostname:5432/vcluster"
+```
+
+## Upgrading vCluster
+
+To upgrade an existing vCluster installation:
+
+```bash
+# Update the Helm repository
+helm repo update
+
+# Upgrade vCluster
+helm upgrade my-vcluster loft-sh/vcluster \
+  --namespace vcluster-my-vcluster \
+  --values values.yaml \
+  --reuse-values
+```
+
+<Warning>
+  Always backup your data before upgrading. If using persistent volumes, ensure they are properly configured with retention policies.
+</Warning>
+
+## Uninstalling vCluster
+
+To completely remove a vCluster:
+
+```bash
+helm uninstall my-vcluster --namespace vcluster-my-vcluster
+```
+
+This removes all Kubernetes components associated with the vCluster.
+
+<Note>
+  By default, persistent volume claims are retained even after uninstallation. To delete them, you need to manually remove the PVCs or configure the retention policy.
+</Note>
+
+## Common Installation Pitfalls
+
+### Insufficient Permissions
+
+**Problem**: Installation fails with permission errors.
+
+**Solution**: Ensure your service account has cluster-admin privileges or at minimum:
+- Create/manage namespaces
+- Create cluster roles and bindings
+- Create custom resource definitions (if using integrations)
+
+### Resource Constraints
+
+**Problem**: vCluster pods are stuck in Pending state.
+
+**Solution**: Check node resources and adjust resource requests:
+```yaml
+controlPlane:
+  statefulSet:
+    resources:
+      requests:
+        cpu: 200m    # Reduced from default
+        memory: 256Mi
+```
+
+### Namespace Conflicts
+
+**Problem**: "namespace already exists" error during installation.
+
+**Solution**: Either:
+- Use a different namespace name
+- Delete the existing namespace (after backing up any important data)
+- Use `helm upgrade --install` instead of `helm install`
+
+### Storage Class Issues
+
+**Problem**: PVCs remain in Pending state.
+
+**Solution**: Verify your cluster has a default storage class or specify one explicitly:
+```yaml
+controlPlane:
+  statefulSet:
+    persistence:
+      volumeClaim:
+        storageClass: "standard"  # or your cluster's storage class
+```
+
+## Next Steps
+
+- [Configuration Options](/deployment/configuration) - Learn about available configuration options
+- [High Availability Setup](/deployment/high-availability) - Configure vCluster for production HA
+- [Networking Configuration](/deployment/networking) - Set up networking for your use case
+- [Storage Configuration](/deployment/storage) - Configure persistent storage options

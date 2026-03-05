@@ -1,0 +1,139 @@
+---
+title: Values Reference
+description: Complete reference for vCluster Helm values
+---
+
+This page provides a comprehensive reference for all available configuration options in vCluster's `values.yaml`. These values control the behavior of your virtual cluster deployment.
+
+## Configuration Structure
+
+vCluster configuration is organized into several main sections:
+
+- **sync**: Resource synchronization between virtual and host clusters
+- **controlPlane**: Control plane components and deployment settings
+- **networking**: Network configuration and DNS settings
+- **rbac**: Role-Based Access Control configuration
+- **policies**: Resource quotas, limits, and network policies
+- **integrations**: Third-party operator integrations
+- **deploy**: Additional components to deploy
+- **privateNodes**: Private nodes mode configuration
+- **experimental**: Experimental features
+
+## Top-Level Configuration Options
+
+<ParamField path="exportKubeConfig" type="object">
+  Configure how vCluster exports the kubeconfig file.
+
+  <Expandable title="properties">
+    <ParamField path="context" type="string">
+      Name of the context within the generated kubeconfig.
+    </ParamField>
+
+    <ParamField path="server" type="string">
+      Custom hostname for the generated kubeconfig. Overrides default `https://localhost:8443`.
+    </ParamField>
+
+    <ParamField path="insecure" type="boolean" default="false">
+      Skip TLS verification for the server.
+    </ParamField>
+
+    <ParamField path="serviceAccount" type="object">
+      Generate a service account token instead of default certificates.
+      
+      <Expandable title="properties">
+        <ParamField path="name" type="string">
+          Service account name to use for token generation.
+        </ParamField>
+        
+        <ParamField path="namespace" type="string" default="kube-system">
+          Namespace of the service account.
+        </ParamField>
+        
+        <ParamField path="clusterRole" type="string">
+          ClusterRole to assign to the service account.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="additionalSecrets" type="array">
+      Additional host cluster secrets where vCluster stores the generated kubeconfig.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="plugins" type="object">
+  Define which vCluster plugins to load. This is a map of plugin configurations.
+</ParamField>
+
+<ParamField path="telemetry" type="object">
+  Configuration related to telemetry gathered about vCluster usage.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable telemetry for the vCluster control plane.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="logging" type="object">
+  Structured logging options for vCluster.
+
+  <Expandable title="properties">
+    <ParamField path="encoding" type="string" default="console">
+      Format of vCluster logs. Can be `json` or `console`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Example: Basic Configuration
+
+```yaml
+exportKubeConfig:
+  context: my-vcluster
+  server: https://vcluster.example.com
+  insecure: false
+
+telemetry:
+  enabled: true
+
+logging:
+  encoding: json
+```
+
+## Example: Service Account Authentication
+
+```yaml
+exportKubeConfig:
+  serviceAccount:
+    name: vcluster-admin
+    namespace: kube-system
+    clusterRole: cluster-admin
+  additionalSecrets:
+    - name: vcluster-kubeconfig
+      namespace: team-a
+    - name: vcluster-kubeconfig-backup
+      namespace: team-b
+```
+
+## Global Values
+
+<ParamField path="global" type="object">
+  Global values shared across all Helm (sub)charts. These values are passed to all sub-charts and can be used for consistent configuration across the deployment.
+</ParamField>
+
+## Related Configuration
+
+- See [Sync Configuration](/config/sync-configuration) for resource synchronization options
+- See [Control Plane](/config/control-plane) for control plane settings
+- See [Networking Options](/config/networking-options) for network configuration
+- See [RBAC Configuration](/config/rbac-configuration) for access control settings
+
+## Validation
+
+vCluster validates the configuration on startup. Common validation rules include:
+
+- Backing store type cannot be changed after initial deployment
+- Namespace sync settings cannot be modified after enabling
+- VPN settings cannot be toggled after initial configuration
+
+For a full list of immutable configuration options, refer to the vCluster upgrade documentation.

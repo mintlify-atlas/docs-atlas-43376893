@@ -1,0 +1,522 @@
+---
+title: Certificate Management
+description: Managing TLS certificates for vCluster control plane and workloads
+---
+
+vCluster automatically generates and manages TLS certificates for secure communication between components. This page explains certificate architecture, rotation procedures, and best practices.
+
+## Certificate Architecture
+
+vCluster uses multiple certificate authorities (CAs) and certificates for different components:
+
+### Certificate Authorities
+
+vCluster creates the following CAs:
+
+1. **Kubernetes CA** (`ca.crt`, `ca.key`)
+   - Signs all Kubernetes component certificates
+   - Used for API server, controller manager, scheduler
+
+2. **Server CA** (`server-ca.crt`, `server-ca.key`)
+   - Used for server certificate validation
+   - Copy of the main Kubernetes CA
+
+3. **Client CA** (`client-ca.crt`, `client-ca.key`)
+   - Validates client certificates
+   - Copy of the main Kubernetes CA
+
+4. **etcd CA** (`etcd/ca.crt`, `etcd/ca.key`)
+   - Dedicated CA for etcd cluster
+   - Ensures etcd communication security
+
+5. **Front Proxy CA** (`front-proxy-ca.crt`, `front-proxy-ca.key`)
+   - Used for extension API servers
+   - Enables aggregated API servers
+
+### Component Certificates
+
+From `pkg/certs/constants.go`, vCluster manages these certificates:
+
+```go
+const (
+    // API Server certificates
+    APIServerCertName = "apiserver.crt"
+    APIServerKeyName  = "apiserver.key"
+    
+    // Kubelet client certificates
+    APIServerKubeletClientCertName = "apiserver-kubelet-client.crt"
+    APIServerKubeletClientKeyName  = "apiserver-kubelet-client.key"
+    
+    // etcd certificates
+    EtcdServerCertName = "etcd/server.crt"
+    EtcdServerKeyName  = "etcd/server.key"
+    EtcdPeerCertName   = "etcd/peer.crt"
+    EtcdPeerKeyName    = "etcd/peer.key"
+    
+    // Service account keys
+    ServiceAccountPublicKeyName  = "sa.pub"
+    ServiceAccountPrivateKeyName = "sa.key"
+)
+```
+
+### Certificate Validity
+
+By default, certificates are valid for 10 years:
+
+```go
+// From pkg/certs/constants.go
+const CertificateValidity = time.Hour * 24 * 365 * 10
+```
+
+## Certificate Storage
+
+Certificates are stored in a Kubernetes Secret in the host cluster:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-vcluster-certs
+  namespace: vcluster-namespace
+  labels:
+    app: vcluster
+    vcluster-name: my-vcluster
+type: Opaque
+data:
+  ca.crt: <base64-encoded>
+  ca.key: <base64-encoded>
+  apiserver.crt: <base64-encoded>
+  apiserver.key: <base64-encoded>
+  # ... other certificates
+```
+
+The secret naming follows the pattern:
+
+```go
+// From pkg/certs/ensure.go
+func CertSecretName(vClusterName string) string {
+    return vClusterName + "-certs"
+}
+```
+
+## Automatic Certificate Generation
+
+vCluster automatically generates certificates during initialization:
+
+```go
+// From pkg/certs/ensure.go
+func Generate(ctx context.Context, serviceCIDR, certificatesDir string, options *config.VirtualClusterConfig) error {
+    // Create kubeadm config
+    kubeadmConfig, err := GenerateInitKubeadmConfig(serviceCIDR, certificatesDir, options)
+    if err != nil {
+        return fmt.Errorf("create kubeadm config: %w", err)
+    }
+    
+    // Generate certificates
+    err = EnsureCerts(ctx, currentNamespace, currentNamespaceClient, certificatesDir, options, kubeadmConfig)
+    if err != nil {
+        return fmt.Errorf("ensure certs: %w", err)
+    }
+    
+    return nil
+}
+```
+
+### Extra SANs (Subject Alternative Names)
+
+Configure additional SANs for the API server certificate:
+
+```yaml
+controlPlane:
+  proxy:
+    extraSANs:
+      - "vcluster.example.com"
+      - "192.168.1.100"
+      - "*.vcluster.svc.cluster.local"
+```
+
+The extra SANs are automatically added to certificates:
+
+```go
+// From pkg/certs/ensure.go
+func GetEtcdExtraSANs(options *config.VirtualClusterConfig) []string {
+    extraSans := []string{"localhost"}
+    
+    if options.ControlPlane.Standalone.Enabled {
+        extraSans = append(extraSans, "127.0.0.1", "0.0.0.0")
+    } else {
+        // Add service names
+        etcdService := options.Name + "-etcd"
+        extraSans = append(extraSans,
+            etcdService,
+            etcdService+"-headless",
+            etcdService+"."+currentNamespace,
+        )
+    }
+    
+    // Add custom SANs
+    extraSans = append(extraSans, options.ControlPlane.Proxy.ExtraSANs...)
+    return extraSans
+}
+```
+
+## Certificate Rotation
+
+vCluster supports automatic certificate rotation for leaf certificates and manual rotation for CA certificates.
+
+### Automatic Leaf Certificate Renewal
+
+vCluster automatically renews leaf certificates that are expiring:
+
+```go
+// From pkg/certs/ensure.go
+func certsExpiringSoon(secretData map[string][]byte) bool {
+    for _, secretKey := range certMap {
+        if !strings.HasSuffix(secretKey, ".crt") {
+            continue
+        }
+        // Skip CA certs
+        if isCAFile(secretKey) {
+            continue
+        }
+        
+        certs, err := certhelper.ParseCertsPEM(pemBytes)
+        if err != nil {
+            return true
+        }
+        
+        for _, cert := range certs {
+            if certhelper.IsCertExpired(cert) {
+                return true
+            }
+        }
+    }
+    return false
+}
+```
+
+When certificates are expiring:
+
+1. CA certificates and service account keys are preserved
+2. Expiring leaf certificates are removed
+3. New leaf certificates are generated using existing CAs
+4. The certificate secret is updated
+
+### Manual Certificate Rotation
+
+Rotate leaf certificates manually:
+
+```bash
+vcluster certs rotate --vcluster my-vcluster --namespace vcluster-namespace
+```
+
+The rotation process:
+
+```go
+// From pkg/certs/rotate.go
+func Rotate(ctx context.Context, vConfig *config.VirtualClusterConfig, pkiPath string, withCA bool, log log.Logger) error {
+    // Backup existing certificates
+    log.Info("Backing up previous PKI directory")
+    backupDir := filepath.Join(pkiPath, "../pki.bak/" + timestamp)
+    if err := backupDirectory(pkiPath, backupDir); err != nil {
+        return fmt.Errorf("backing up PKI directory: %w", err)
+    }
+    
+    // Remove certificates (preserve SA keys and optionally CA)
+    excludeFuncs := []excludeFunc{excludeSAFiles}
+    if !withCA {
+        excludeFuncs = append(excludeFuncs, excludeCAFiles)
+    }
+    
+    if err := removeFiles(pkiPath, excludeFuncs...); err != nil {
+        return fmt.Errorf("removing files from PKI directory: %w", err)
+    }
+    
+    // Generate new certificates
+    if err := generateCertificates(pkiPath, kubeadmConfig); err != nil {
+        return fmt.Errorf("creating pki assets: %w", err)
+    }
+    
+    // Update secret
+    return SyncSecret(ctx, vConfig.HostNamespace, CertSecretName(vConfig.Name), pkiPath, vConfig.HostClient)
+}
+```
+
+### Rotate CA Certificates
+
+Rotate the entire PKI including CA certificates:
+
+```bash
+vcluster certs rotate-ca --vcluster my-vcluster --namespace vcluster-namespace
+```
+
+<Warning>
+Rotating CA certificates is a disruptive operation that requires:
+- Restarting all vCluster components
+- Regenerating all kubeconfig files
+- Updating all client certificates
+</Warning>
+
+### Check Certificate Expiry
+
+Check certificate expiration dates:
+
+```bash
+vcluster certs check --vcluster my-vcluster --namespace vcluster-namespace
+```
+
+This displays:
+
+```json
+{
+  "filename": "apiserver.crt",
+  "subject": "CN=kube-apiserver",
+  "issuer": "CN=kubernetes",
+  "expiryTime": "2034-01-01T00:00:00Z",
+  "status": "OK"
+}
+```
+
+## Custom Certificate Configuration
+
+### Use External Certificates
+
+Provide your own certificates by creating the secret before vCluster starts:
+
+```bash
+# Create certificate secret
+kubectl create secret generic my-vcluster-certs \
+  --from-file=ca.crt=./ca.crt \
+  --from-file=ca.key=./ca.key \
+  --from-file=apiserver.crt=./apiserver.crt \
+  --from-file=apiserver.key=./apiserver.key \
+  --namespace vcluster-namespace
+```
+
+vCluster will use existing certificates if the secret exists.
+
+### Generate Kubeconfig with Custom Certificates
+
+Create a kubeconfig file with custom certificates:
+
+```go
+// From pkg/certs/ensure.go
+func CreateKubeConfig(spec *KubeConfigOptions, path string) error {
+    config, err := BuildKubeConfig(spec)
+    if err != nil {
+        return fmt.Errorf("failed to build kubeconfig: %w", err)
+    }
+    
+    return kubeconfigutil.WriteToDisk(path, config)
+}
+
+type KubeConfigOptions struct {
+    CACert        string
+    CAKey         string
+    Organizations []string
+    APIServer     string
+    ClientName    string
+}
+```
+
+Use this to create admin kubeconfigs:
+
+```bash
+# Extract certificates from secret
+kubectl get secret my-vcluster-certs -n vcluster-namespace -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+kubectl get secret my-vcluster-certs -n vcluster-namespace -o jsonpath='{.data.ca\.key}' | base64 -d > ca.key
+
+# Create custom kubeconfig
+vcluster connect my-vcluster --namespace vcluster-namespace --update-current=false
+```
+
+## Certificate Synchronization
+
+In standalone mode, certificates are stored on disk:
+
+```yaml
+controlPlane:
+  standalone:
+    enabled: true
+```
+
+Certificates location: `/data/pki/`
+
+For high availability, certificates are synced from the secret:
+
+```go
+// From pkg/certs/rotate.go
+func SyncSecret(ctx context.Context, secretNamespace, secretName, pkiPath string, client kubernetes.Interface) error {
+    secret, err := client.CoreV1().Secrets(secretNamespace).Get(ctx, secretName, metav1.GetOptions{})
+    if err != nil {
+        return fmt.Errorf("getting cert secret %s: %w", secretName, err)
+    }
+    
+    data := map[string][]byte{}
+    for k, v := range certMap {
+        d, err := os.ReadFile(filepath.Join(pkiPath, k))
+        if err != nil {
+            continue
+        }
+        data[v] = d
+    }
+    
+    // Patch the secret
+    patch := crclient.MergeFrom(oldSecret)
+    patchBytes, err := patch.Data(secret)
+    
+    _, err = client.CoreV1().Secrets(secretNamespace).Patch(ctx, secretName, patch.Type(), patchBytes, metav1.PatchOptions{})
+    return err
+}
+```
+
+## Best Practices
+
+### Monitor Certificate Expiry
+
+Set up monitoring for certificate expiration:
+
+```bash
+# Check certificates regularly
+*/30 * * * * vcluster certs check --vcluster my-vcluster
+```
+
+### Backup Certificates
+
+Backup certificate secrets regularly:
+
+```bash
+# Export certificate secret
+kubectl get secret my-vcluster-certs -n vcluster-namespace -o yaml > vcluster-certs-backup.yaml
+
+# Backup to secure storage
+kubectl get secret my-vcluster-certs -n vcluster-namespace -o json | \
+  gpg --encrypt --recipient admin@example.com > certs-backup.gpg
+```
+
+### Rotate Before Expiry
+
+Rotate certificates well before expiration:
+
+- **Leaf certificates**: Rotate 30 days before expiry
+- **CA certificates**: Plan rotation 90 days in advance
+
+### Use Short-Lived Certificates
+
+For enhanced security, use shorter certificate lifetimes:
+
+```bash
+# Set custom validity period (development only)
+export DEVELOPMENT=true
+export VCLUSTER_CERTS_VALIDITYPERIOD=2160h  # 90 days
+
+vcluster certs rotate --vcluster my-vcluster
+```
+
+### Secure Private Keys
+
+Protect certificate private keys:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-vcluster-certs
+  annotations:
+    # Prevent accidental deletion
+    meta.helm.sh/release-namespace: vcluster-namespace
+type: Opaque
+```
+
+Restrict access to certificate secrets:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cert-secret-access
+  namespace: vcluster-namespace
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["my-vcluster-certs"]
+    verbs: ["get"]  # Read-only
+```
+
+### Test Certificate Rotation
+
+Test rotation in a non-production environment first:
+
+```bash
+# Create test vCluster
+vcluster create test-rotation --namespace test
+
+# Perform rotation
+vcluster certs rotate --vcluster test-rotation --namespace test
+
+# Verify connectivity
+vcluster connect test-rotation --namespace test
+kubectl get nodes
+```
+
+## Troubleshooting
+
+### Certificate Expired Errors
+
+If you encounter expired certificate errors:
+
+```bash
+# Check certificate status
+vcluster certs check --vcluster my-vcluster --namespace vcluster-namespace
+
+# Rotate certificates
+vcluster certs rotate --vcluster my-vcluster --namespace vcluster-namespace
+
+# Restart vCluster pods
+kubectl rollout restart statefulset my-vcluster -n vcluster-namespace
+```
+
+### Invalid Certificate Errors
+
+Verify certificate contents:
+
+```bash
+# Extract and inspect certificate
+kubectl get secret my-vcluster-certs -n vcluster-namespace \
+  -o jsonpath='{.data.apiserver\.crt}' | base64 -d | \
+  openssl x509 -text -noout
+
+# Check SANs
+openssl x509 -in apiserver.crt -text | grep -A1 "Subject Alternative Name"
+```
+
+### Connection Refused After Rotation
+
+Restart vCluster components:
+
+```bash
+# Delete pods to force recreation with new certificates
+kubectl delete pods -l release=my-vcluster -n vcluster-namespace
+
+# Wait for pods to be ready
+kubectl wait --for=condition=ready pod -l release=my-vcluster -n vcluster-namespace
+```
+
+### Certificate Secret Not Found
+
+Regenerate certificates:
+
+```bash
+# Delete existing secret if corrupted
+kubectl delete secret my-vcluster-certs -n vcluster-namespace
+
+# Restart vCluster to regenerate
+kubectl rollout restart statefulset my-vcluster -n vcluster-namespace
+```
+
+## Further Reading
+
+- [Multi-Tenancy Isolation](/security/isolation)
+- [RBAC Configuration](/security/rbac)
+- [Kubernetes PKI Certificates](https://kubernetes.io/docs/setup/best-practices/certificates/)
+- [OpenSSL Certificate Management](https://www.openssl.org/docs/man1.1.1/man1/openssl-x509.html)

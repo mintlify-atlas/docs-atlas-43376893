@@ -1,0 +1,233 @@
+---
+title: "vcluster create"
+description: "Create a new virtual cluster"
+---
+
+## Synopsis
+
+Creates a new virtual cluster inside a Kubernetes namespace.
+
+```bash
+vcluster create VCLUSTER_NAME [flags]
+```
+
+## Description
+
+The `create` command deploys a new virtual Kubernetes cluster into a namespace of your host cluster. By default, it uses Helm to install the vCluster chart and automatically connects your `kubectl` context to the new virtual cluster.
+
+## Examples
+
+### Basic Usage
+
+```bash
+# Create a vcluster with default settings
+vcluster create my-vcluster --namespace team-x
+
+# Create without auto-connecting
+vcluster create my-vcluster -n team-x --connect=false
+
+# Create with custom Kubernetes version
+vcluster create my-vcluster -n team-x --kubernetes-version=1.28
+```
+
+### With Custom Configuration
+
+```bash
+# Use a values file
+vcluster create my-vcluster -n team-x --values values.yaml
+
+# Set individual values
+vcluster create my-vcluster -n team-x \
+  --set controlPlane.backingStore.etcd.deploy.enabled=true
+
+# Use a local chart directory
+vcluster create my-vcluster -n team-x --local-chart-dir ./chart
+```
+
+### Different Distributions
+
+```bash
+# Use vanilla Kubernetes instead of k3s
+vcluster create my-vcluster -n team-x --distro k8s
+
+# Specify exact chart version
+vcluster create my-vcluster -n team-x --chart-version 0.30.0
+```
+
+## Common Flags
+
+<ParamField path="--namespace" type="string" required>
+  The Kubernetes namespace to create the vCluster in. The namespace will be created if it doesn't exist.
+</ParamField>
+
+<ParamField path="--connect" type="boolean" default="true">
+  If true, automatically updates your kubeconfig to connect to the new vCluster.
+</ParamField>
+
+<ParamField path="--driver" type="string" default="helm">
+  The driver to use for managing the vCluster. Options: `helm`, `platform`, `docker`.
+</ParamField>
+
+<ParamField path="--kubernetes-version" type="string">
+  The Kubernetes version to use for the virtual cluster (e.g., `1.28`, `1.29`).
+</ParamField>
+
+<ParamField path="--distro" type="string" default="k3s">
+  Kubernetes distribution to use. Options: `k3s`, `k8s`, `k0s`, `eks`.
+</ParamField>
+
+## Helm Flags
+
+<ParamField path="--values" type="string">
+  Path to a values.yaml file to use for Helm installation.
+</ParamField>
+
+<ParamField path="--set" type="string[]">
+  Set values on the command line (can be specified multiple times).
+</ParamField>
+
+<ParamField path="--chart-version" type="string">
+  The vCluster chart version to use.
+</ParamField>
+
+<ParamField path="--chart-repo" type="string">
+  The chart repository URL.
+</ParamField>
+
+<ParamField path="--local-chart-dir" type="string">
+  Path to a local chart directory to use instead of remote chart.
+</ParamField>
+
+<ParamField path="--upgrade" type="boolean">
+  If true, upgrade the vCluster if it already exists.
+</ParamField>
+
+## Platform Flags
+
+These flags are available when using `--driver platform`:
+
+<ParamField path="--project" type="string">
+  The vCluster Platform project to use.
+</ParamField>
+
+<ParamField path="--template" type="string">
+  The vCluster template to use.
+</ParamField>
+
+<ParamField path="--params" type="string">
+  Additional parameters for the template.
+</ParamField>
+
+## Advanced Flags
+
+<ParamField path="--expose" type="boolean">
+  If enabled, the vCluster will be exposed via an ingress or load balancer.
+</ParamField>
+
+<ParamField path="--expose-local" type="boolean" default="true">
+  If enabled, the vCluster will be directly accessible via port-forwarding.
+</ParamField>
+
+<ParamField path="--connect-external" type="boolean">
+  Use external address for connecting instead of port-forwarding.
+</ParamField>
+
+## Complete Example
+
+Here's a complete example creating a production-ready vCluster:
+
+```bash create-production.sh
+vcluster create production-vcluster \
+  --namespace production \
+  --distro k8s \
+  --kubernetes-version 1.29 \
+  --values production-values.yaml \
+  --set controlPlane.backingStore.etcd.deploy.enabled=true \
+  --set controlPlane.backingStore.etcd.deploy.statefulSet.highAvailability.replicas=3 \
+  --set controlPlane.statefulSet.highAvailability.replicas=3
+```
+
+With a `production-values.yaml`:
+
+```yaml production-values.yaml
+controlPlane:
+  backingStore:
+    etcd:
+      deploy:
+        enabled: true
+        statefulSet:
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+          persistence:
+            size: 10Gi
+  statefulSet:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+
+sync:
+  toHost:
+    pods:
+      enabled: true
+    services:
+      enabled: true
+```
+
+## Output
+
+When successful, the command outputs:
+
+```
+info   Creating namespace team-x
+info   Deploying vCluster my-vcluster in namespace team-x
+info   Successfully deployed vCluster my-vcluster
+info   Switched active kube context to vcluster_my-vcluster_team-x_kind-kind
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Namespace already exists error">
+    If the namespace already exists, this is normal. vCluster will use the existing namespace.
+
+    To avoid the message, create the namespace first:
+    ```bash
+    kubectl create namespace team-x
+    vcluster create my-vcluster -n team-x
+    ```
+  </Accordion>
+
+  <Accordion title="Chart not found">
+    If you see chart not found errors:
+
+    ```bash
+    # Update Helm repos
+    helm repo add loft https://charts.loft.sh
+    helm repo update
+
+    # Try again
+    vcluster create my-vcluster -n team-x
+    ```
+  </Accordion>
+
+  <Accordion title="Connection timeout">
+    If the vCluster creates but connection times out:
+
+    ```bash
+    # Check if pods are running
+    kubectl get pods -n team-x
+
+    # Try connecting manually
+    vcluster connect my-vcluster -n team-x
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## See Also
+
+- [vcluster connect](/cli/connect) - Connect to an existing vCluster
+- [vcluster list](/cli/list) - List all vClusters
+- [Configuration Reference](/config/values-reference) - Helm values documentation

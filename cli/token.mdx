@@ -1,0 +1,123 @@
+---
+title: "vcluster token"
+description: "Manage authentication tokens"
+---
+
+## Synopsis
+
+Manage authentication tokens for vCluster access.
+
+```bash
+vcluster token [command] [flags]
+```
+
+## Subcommands
+
+- `create` - Create a new token
+- `list` - List existing tokens
+- `delete` - Delete a token
+
+## vcluster token create
+
+Create a new authentication token.
+
+### Synopsis
+
+```bash
+vcluster token create TOKEN_NAME [flags]
+```
+
+### Examples
+
+```bash
+# Create token for CI/CD
+vcluster token create ci-bot -n team-x
+
+# Create token with TTL
+vcluster token create temp-token -n team-x --ttl 24h
+
+# Create token for specific service account
+vcluster token create deploy-bot -n team-x \
+  --service-account deploy-sa
+```
+
+### Flags
+
+<ParamField path="--namespace" type="string" required>
+  The namespace where the vCluster is running.
+</ParamField>
+
+<ParamField path="--ttl" type="duration">
+  Token time-to-live (e.g., `24h`, `7d`).
+</ParamField>
+
+<ParamField path="--service-account" type="string">
+  Service account to create token for.
+</ParamField>
+
+## vcluster token list
+
+List authentication tokens.
+
+### Synopsis
+
+```bash
+vcluster token list [flags]
+```
+
+### Examples
+
+```bash
+# List tokens
+vcluster token list -n team-x
+
+# JSON output
+vcluster token list -n team-x --output json
+```
+
+## vcluster token delete
+
+Delete an authentication token.
+
+### Synopsis
+
+```bash
+vcluster token delete TOKEN_NAME [flags]
+```
+
+### Examples
+
+```bash
+# Delete token
+vcluster token delete ci-bot -n team-x
+```
+
+## Complete Example
+
+```bash ci-setup.sh
+#!/bin/bash
+VCLUSTER="ci-cluster"
+NAMESPACE="ci"
+
+# Create vCluster
+vcluster create $VCLUSTER -n $NAMESPACE
+
+# Create service account inside vCluster
+vcluster connect $VCLUSTER -n $NAMESPACE
+kubectl create serviceaccount ci-bot
+kubectl create clusterrolebinding ci-bot \
+  --clusterrole=cluster-admin \
+  --serviceaccount=default:ci-bot
+vcluster disconnect
+
+# Create token
+TOKEN=$(vcluster token create ci-bot -n $NAMESPACE --service-account ci-bot --ttl 720h)
+
+# Use in CI
+echo "CI_VCLUSTER_TOKEN=$TOKEN" >> $GITHUB_ENV
+```
+
+## See Also
+
+- [vcluster connect](/cli/connect) - Connect using tokens
+- [Security Guide](/security/rbac) - RBAC and authentication

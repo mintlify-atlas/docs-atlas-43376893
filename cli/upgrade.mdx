@@ -1,0 +1,79 @@
+---
+title: "vcluster upgrade"
+description: "Upgrade vCluster CLI to the latest version"
+---
+
+## Synopsis
+
+Upgrades the vCluster CLI to the latest version.
+
+```bash
+vcluster upgrade [flags]
+```
+
+## Description
+
+The `upgrade` command downloads and installs the latest version of the vCluster CLI.
+
+<Note>
+This command only upgrades the CLI tool itself, not virtual clusters. To upgrade a running vCluster, use `vcluster create --upgrade`.
+</Note>
+
+## Examples
+
+```bash
+# Upgrade to latest version
+vcluster upgrade
+
+# Check current version first
+vcluster --version
+```
+
+## What Gets Upgraded
+
+- **vCluster CLI binary** - The `vcluster` command-line tool
+- **Not upgraded:**
+  - Running virtual clusters (must be upgraded separately)
+  - Helm charts
+  - vCluster Platform components
+
+## Upgrading Virtual Clusters
+
+To upgrade a running virtual cluster:
+
+```bash
+# Upgrade an existing vCluster to latest chart version
+vcluster create my-vcluster -n team-x --upgrade
+
+# Upgrade to specific version
+vcluster create my-vcluster -n team-x --upgrade --chart-version 0.30.0
+```
+
+## Manual Upgrade
+
+If the automatic upgrade fails, you can upgrade manually:
+
+<Tabs>
+  <Tab title="Homebrew">
+    ```bash
+    brew upgrade loft-sh/tap/vcluster
+    ```
+  </Tab>
+  
+  <Tab title="Direct Download">
+    ```bash
+    curl -L -o vcluster "https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-$(uname -s)-$(uname -m | sed 's/x86_64/amd64/')" && \
+    sudo install -c -m 0755 vcluster /usr/local/bin && \
+    rm -f vcluster
+    ```
+  </Tab>
+  
+  <Tab title="Windows">
+    Download the latest release from [GitHub](https://github.com/loft-sh/vcluster/releases/latest) and replace your existing binary.
+  </Tab>
+</Tabs>
+
+## See Also
+
+- [Upgrading Guide](/operations/upgrading) - Complete upgrade documentation
+- [vcluster create](/cli/create) - Create or upgrade virtual clusters

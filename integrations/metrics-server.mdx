@@ -1,0 +1,505 @@
+---
+title: "Metrics Server Integration"
+description: "Integrate vCluster with the host cluster's metrics-server to enable resource metrics and horizontal pod autoscaling"
+---
+
+## Overview
+
+The metrics-server integration allows vCluster to proxy metrics API requests from the virtual cluster to the host cluster's metrics-server installation. This enables Kubernetes resource metrics (CPU and memory) for pods and nodes without deploying a separate metrics-server in each virtual cluster.
+
+<Note>
+**Key Benefits:**
+- Reuse host cluster's metrics-server installation
+- Enable `kubectl top pods` and `kubectl top nodes` in virtual clusters
+- Support Horizontal Pod Autoscaler (HPA) in virtual clusters
+- Reduce resource overhead by sharing metrics infrastructure
+</Note>
+
+<Warning>
+The metrics-server integration is **not supported in private nodes mode**. It requires the shared or dedicated nodes architecture.
+</Warning>
+
+## How It Works
+
+The integration operates as an API proxy that:
+
+1. **Intercepts metrics API requests** from the virtual cluster's API server
+2. **Translates resource names** between virtual and host cluster namespaces
+3. **Proxies requests** to the host cluster's metrics-server
+4. **Filters and transforms responses** to show only relevant metrics
+5. **Returns translated metrics** to the virtual cluster
+
+The proxy runs on port `9001` within the vCluster control plane and registers the `metrics.k8s.io/v1beta1` API service.
+
+### Proxied API Endpoints
+
+The integration proxies these metrics API endpoints:
+
+**Pod Metrics:**
+- `GET /apis/metrics.k8s.io/v1beta1/pods` - List pod metrics across all namespaces
+- `GET /apis/metrics.k8s.io/v1beta1/namespaces/{namespace}/pods` - List pod metrics in a namespace
+- `GET /apis/metrics.k8s.io/v1beta1/namespaces/{namespace}/pods/{name}` - Get specific pod metrics
+
+**Node Metrics:**
+- `GET /apis/metrics.k8s.io/v1beta1/nodes` - List node metrics
+- `GET /apis/metrics.k8s.io/v1beta1/nodes/{name}` - Get specific node metrics
+
+## Prerequisites
+
+1. **metrics-server must be installed on the host cluster**
+   ```bash
+   # Install metrics-server if not already present
+   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+   ```
+
+2. **Verify metrics-server is running**
+   ```bash
+   kubectl get pods -n kube-system | grep metrics-server
+   ```
+
+3. **Test metrics on the host cluster**
+   ```bash
+   kubectl top nodes
+   kubectl top pods -A
+   ```
+
+## Setup Instructions
+
+### Basic Configuration
+
+Enable the metrics-server integration:
+
+```yaml values.yaml
+integrations:
+  metricsServer:
+    enabled: true
+```
+
+Deploy your vCluster:
+
+```bash
+vcluster create my-vcluster -n team-x -f values.yaml
+```
+
+### Advanced Configuration
+
+Customize which metrics APIs to proxy:
+
+```yaml values.yaml
+integrations:
+  metricsServer:
+    enabled: true
+    # Proxy node metrics API (default: true)
+    nodes: true
+    # Proxy pod metrics API (default: true)
+    pods: true
+```
+
+If you have a custom metrics-server service configuration:
+
+```yaml values.yaml
+integrations:
+  metricsServer:
+    enabled: true
+    # Custom metrics-server service details
+    apiService:
+      service:
+        name: metrics-server  # default
+        namespace: kube-system  # default
+        port: 443  # default
+```
+
+### Disabling Built-in Metrics Server
+
+If you're using the integration, disable the built-in metrics-server deployment:
+
+```yaml values.yaml
+deploy:
+  metricsServer:
+    enabled: false  # Don't deploy metrics-server in vCluster
+
+integrations:
+  metricsServer:
+    enabled: true  # Use host cluster's metrics-server instead
+```
+
+## Usage Examples
+
+### View Pod Resource Usage
+
+Once the integration is enabled, use standard kubectl commands:
+
+```bash
+# View all pod metrics
+kubectl top pods -A
+
+# View pods in a specific namespace
+kubectl top pods -n production
+
+# Sort by CPU usage
+kubectl top pods -A --sort-by=cpu
+
+# Sort by memory usage
+kubectl top pods -A --sort-by=memory
+```
+
+Example output:
+```
+NAMESPACE   NAME                     CPU(cores)   MEMORY(bytes)
+default     nginx-7854ff8877-k2qvw   1m           8Mi
+default     redis-6d8b9c4f5d-xp2mt   2m           12Mi
+```
+
+### View Node Resource Usage
+
+View metrics for nodes visible in your virtual cluster:
+
+```bash
+# List all node metrics
+kubectl top nodes
+
+# View specific node
+kubectl top node worker-1
+```
+
+Example output:
+```
+NAME       CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%
+worker-1   250m         12%    1024Mi         25%
+worker-2   180m         9%     768Mi          19%
+```
+
+<Note>
+Node metrics are only available for nodes that are synced to your virtual cluster. If you're using fake nodes (default), node metrics will show only synced nodes.
+</Note>
+
+### Configure Horizontal Pod Autoscaler
+
+Use HPA with CPU or memory metrics:
+
+```yaml hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nginx-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nginx
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+```
+
+Apply and verify:
+
+```bash
+kubectl apply -f hpa.yaml
+kubectl get hpa
+kubectl describe hpa nginx-hpa
+```
+
+### Monitor HPA Scaling Decisions
+
+```bash
+# Watch HPA status
+kubectl get hpa -w
+
+# View HPA events
+kubectl describe hpa nginx-hpa
+
+# Check current metrics
+kubectl top pods -l app=nginx
+```
+
+### Using with Vertical Pod Autoscaler
+
+The metrics-server integration also supports VPA:
+
+```yaml vpa.yaml
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: nginx-vpa
+  namespace: default
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nginx
+  updatePolicy:
+    updateMode: "Auto"
+```
+
+## Validation
+
+### 1. Verify API Service Registration
+
+```bash
+# Check if metrics API is available
+kubectl get apiservices | grep metrics
+```
+
+Expected output:
+```
+v1beta1.metrics.k8s.io   True        10m
+```
+
+### 2. Test Metrics API Directly
+
+```bash
+# Query the metrics API
+kubectl get --raw /apis/metrics.k8s.io/v1beta1/pods | jq
+
+# Get metrics for a specific namespace
+kubectl get --raw /apis/metrics.k8s.io/v1beta1/namespaces/default/pods | jq
+```
+
+### 3. Check vCluster Logs
+
+```bash
+# View vCluster control plane logs
+kubectl logs -n team-x statefulset/my-vcluster -f | grep metrics
+```
+
+Look for log entries indicating metrics proxy requests:
+```
+Handling metrics request for pods in namespace default
+Proxying request to host metrics-server
+```
+
+### 4. Verify HPA Functionality
+
+Create a test HPA and verify it can read metrics:
+
+```bash
+# Create a simple HPA
+kubectl autoscale deployment nginx --cpu-percent=50 --min=1 --max=3
+
+# Check HPA status
+kubectl get hpa nginx
+```
+
+Healthy output:
+```
+NAME    REFERENCE          TARGETS   MINPODS   MAXPODS   REPLICAS
+nginx   Deployment/nginx   1%/50%    1         3         1
+```
+
+## Common Issues and Solutions
+
+### Issue: "metrics not available" Error
+
+**Symptoms:** `kubectl top` returns "metrics not available"
+
+**Solution:**
+1. Verify metrics-server is running on the host:
+   ```bash
+   vcluster disconnect
+   kubectl top nodes
+   ```
+
+2. Check if the integration is enabled:
+   ```bash
+   kubectl get configmap -n team-x my-vcluster-config -o yaml | grep metricsServer
+   ```
+
+3. Restart the vCluster control plane:
+   ```bash
+   kubectl rollout restart statefulset -n team-x my-vcluster
+   ```
+
+### Issue: Node Metrics Not Available
+
+**Symptoms:** `kubectl top nodes` shows no nodes or wrong nodes
+
+**Solution:**
+
+Node metrics require node syncing to be enabled:
+
+```yaml
+sync:
+  fromHost:
+    nodes:
+      enabled: true  # Enable node syncing
+
+integrations:
+  metricsServer:
+    enabled: true
+    nodes: true  # Enable node metrics proxying
+```
+
+### Issue: HPA Shows "unknown" for Metrics
+
+**Symptoms:** HPA displays `<unknown>` for current metrics
+
+**Solution:**
+1. Ensure pods have resource requests defined:
+   ```yaml
+   resources:
+     requests:
+       cpu: 100m
+       memory: 128Mi
+   ```
+
+2. Wait 1-2 minutes for metrics to populate
+
+3. Check pod metrics are available:
+   ```bash
+   kubectl top pods -l app=nginx
+   ```
+
+### Issue: Metrics API Service Not Found
+
+**Symptoms:** `kubectl get apiservices` doesn't show metrics.k8s.io
+
+**Solution:**
+
+The API service is registered when vCluster starts. Check the logs:
+
+```bash
+kubectl logs -n team-x statefulset/my-vcluster | grep "RegisterOrDeregisterAPIService"
+```
+
+If missing, verify the configuration:
+
+```yaml
+integrations:
+  metricsServer:
+    enabled: true
+```
+
+### Issue: Incorrect Metrics Values
+
+**Symptoms:** Metrics show values from host cluster pods
+
+**Solution:**
+
+This indicates a syncing issue. Verify pod syncing is working:
+
+```bash
+# Check synced pods on host
+vcluster disconnect
+kubectl get pods -n team-x
+
+# Compare with virtual cluster
+vcluster connect my-vcluster -n team-x
+kubectl get pods -A
+```
+
+### Issue: Permission Denied Errors
+
+**Symptoms:** Metrics API returns 403 Forbidden
+
+**Solution:**
+
+Check RBAC permissions for the vCluster service account:
+
+```bash
+kubectl get clusterrole vcluster-my-vcluster -o yaml
+```
+
+Ensure it has permissions to access the metrics API on the host.
+
+## Performance Considerations
+
+1. **Metrics Scraping Frequency**
+   - The host metrics-server typically scrapes every 15-60 seconds
+   - Virtual cluster queries are served from cached data
+   - No additional load on container runtime
+
+2. **Label Translation Overhead**
+   - The proxy translates pod/node labels on each request
+   - Minimal performance impact for typical workloads
+   - Use label selectors to reduce response sizes
+
+3. **API Service Proxy**
+   - Adds ~5-10ms latency for metrics queries
+   - No impact on pod scheduling or execution
+   - Suitable for HPA and monitoring use cases
+
+## Configuration Reference
+
+Complete configuration options from `chart/values.yaml:897-904`:
+
+```yaml
+integrations:
+  metricsServer:
+    # Enable the metrics-server integration
+    enabled: false
+    
+    # Proxy node metrics API
+    nodes: true
+    
+    # Proxy pod metrics API
+    pods: true
+    
+    # Advanced: Custom metrics-server service configuration
+    apiService:
+      service:
+        name: metrics-server
+        namespace: kube-system
+        port: 443
+```
+
+Source code reference: `pkg/integrations/metricsserver/metricsserver.go`
+
+## Best Practices
+
+1. **Always Define Resource Requests**
+   - Set CPU and memory requests for all pods
+   - Required for HPA to function correctly
+   - Helps with better resource utilization
+
+2. **Use Appropriate HPA Thresholds**
+   - Start with conservative targets (70-80% CPU)
+   - Monitor actual usage patterns
+   - Adjust based on application behavior
+
+3. **Monitor Metrics Availability**
+   - Set up alerts for metrics API failures
+   - Check metrics-server health on host cluster
+   - Test metrics after vCluster upgrades
+
+4. **Combine with Custom Metrics**
+   - Use metrics-server for resource metrics
+   - Add Prometheus adapter for custom metrics
+   - Implement comprehensive autoscaling strategies
+
+5. **Regular Testing**
+   - Verify `kubectl top` works after deployments
+   - Test HPA scaling under load
+   - Validate metrics during cluster upgrades
+
+## Comparison with Deployed Metrics Server
+
+| Feature | Integration | Deployed |
+|---------|------------|----------|
+| Resource overhead | Minimal | ~50-100Mi per vCluster |
+| Configuration | Simple | Requires deployment |
+| Updates | Automatic with host | Manual per vCluster |
+| Latency | +5-10ms | Direct |
+| Isolation | Shared | Dedicated |
+| Best for | Most use cases | Private nodes mode |
+
+## Related Resources
+
+- [Kubernetes Metrics Server](https://github.com/kubernetes-sigs/metrics-server)
+- [Horizontal Pod Autoscaler](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/)
+- [vCluster Syncing Overview](/syncing/overview)
+- [Resource Management](/deployment/resource-management)
+- [Integration Source Code](https://github.com/loft-sh/vcluster/blob/main/pkg/integrations/metricsserver/metricsserver.go)

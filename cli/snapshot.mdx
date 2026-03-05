@@ -1,0 +1,132 @@
+---
+title: "vcluster snapshot"
+description: "Create and manage virtual cluster snapshots"
+---
+
+## Synopsis
+
+Create and manage snapshots of virtual clusters for backup and restore.
+
+```bash
+vcluster snapshot [command] [flags]
+```
+
+## Subcommands
+
+- `create` - Create a new snapshot
+- `get` - List existing snapshots
+- `delete` - Delete a snapshot
+
+## vcluster snapshot create
+
+Create a snapshot of a virtual cluster.
+
+### Synopsis
+
+```bash
+vcluster snapshot create VCLUSTER_NAME [flags]
+```
+
+### Examples
+
+```bash
+# Create snapshot to OCI registry
+vcluster snapshot create my-vcluster -n team-x \
+  --backend oci://myregistry.io/vcluster-snapshots
+
+# Create snapshot to S3
+vcluster snapshot create my-vcluster -n team-x \
+  --backend s3://my-bucket/snapshots
+
+# Create snapshot with name
+vcluster snapshot create my-vcluster -n team-x \
+  --backend oci://myregistry.io/snapshots \
+  --name pre-upgrade-backup
+```
+
+### Flags
+
+<ParamField path="--namespace" type="string" required>
+  The Kubernetes namespace where the vCluster is running.
+</ParamField>
+
+<ParamField path="--backend" type="string" required>
+  Storage backend for the snapshot. Supports: `oci://`, `s3://`, or local path.
+</ParamField>
+
+<ParamField path="--name" type="string">
+  Custom name for the snapshot. Defaults to timestamp.
+</ParamField>
+
+<ParamField path="--include-volumes" type="boolean">
+  Include persistent volume data in the snapshot.
+</ParamField>
+
+<ParamField path="--driver" type="string" default="helm">
+  The driver to use.
+</ParamField>
+
+## vcluster snapshot get
+
+List snapshots for a virtual cluster.
+
+### Synopsis
+
+```bash
+vcluster snapshot get VCLUSTER_NAME [flags]
+```
+
+### Examples
+
+```bash
+# List snapshots
+vcluster snapshot get my-vcluster -n team-x \
+  --backend oci://myregistry.io/snapshots
+
+# JSON output
+vcluster snapshot get my-vcluster -n team-x \
+  --backend oci://myregistry.io/snapshots \
+  --output json
+```
+
+### Flags
+
+<ParamField path="--namespace" type="string" required>
+  The Kubernetes namespace.
+</ParamField>
+
+<ParamField path="--backend" type="string" required>
+  Storage backend where snapshots are stored.
+</ParamField>
+
+<ParamField path="--output" type="string" default="table">
+  Output format: `table` or `json`.
+</ParamField>
+
+## Complete Example
+
+```bash backup-workflow.sh
+#!/bin/bash
+VCLUSTER="prod-vcluster"
+NAMESPACE="production"
+BACKEND="oci://myregistry.io/backups"
+
+# Create pre-upgrade snapshot
+echo "Creating snapshot..."
+vcluster snapshot create $VCLUSTER -n $NAMESPACE \
+  --backend $BACKEND \
+  --name "pre-upgrade-$(date +%Y%m%d)" \
+  --include-volumes
+
+# List all snapshots
+echo "Available snapshots:"
+vcluster snapshot get $VCLUSTER -n $NAMESPACE --backend $BACKEND
+
+# Proceed with upgrade
+vcluster create $VCLUSTER -n $NAMESPACE --upgrade
+```
+
+## See Also
+
+- [vcluster restore](/cli/restore) - Restore from snapshot
+- [Snapshots Guide](/operations/snapshots) - Complete snapshot documentation

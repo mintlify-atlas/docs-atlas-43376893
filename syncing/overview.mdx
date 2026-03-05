@@ -1,0 +1,195 @@
+---
+title: Resource Syncing Overview
+description: Learn how vCluster synchronizes resources between virtual and host clusters
+---
+
+vCluster uses a sophisticated **bidirectional syncing mechanism** to keep resources synchronized between the virtual cluster and the host cluster. This syncing architecture is fundamental to how vCluster operates, allowing workloads in the virtual cluster to run on the host cluster's infrastructure while maintaining isolation.
+
+## How Syncing Works
+
+vCluster's syncing engine runs as part of the control plane and watches for resource changes in both the virtual and host clusters. When a resource is created, updated, or deleted, the syncer ensures the corresponding resource in the other cluster is kept in sync.
+
+### Sync Architecture
+
+The syncing system consists of several key components:
+
+**Sync Controller** (`pkg/syncer/syncer.go:31`)
+
+The main controller that manages the reconciliation loop for each resource type. It:
+- Watches resources in both virtual and host clusters
+- Determines which sync operation to perform (SyncToHost, SyncToVirtual, or Sync)
+- Maintains object caches for efficient comparison
+- Handles UID validation and object lifecycle management
+
+**Syncer Interface** (`pkg/syncer/types/syncer.go:20`)
+
+Defines the contract for all resource syncers:
+
+```go
+type Sync[T client.Object] interface {
+    // SyncToHost is called when a virtual object was created and needs to be synced down to the physical cluster
+    SyncToHost(ctx *synccontext.SyncContext, event *synccontext.SyncToHostEvent[T]) (ctrl.Result, error)
+    
+    // Sync is called to sync a virtual object with a physical object
+    Sync(ctx *synccontext.SyncContext, event *synccontext.SyncEvent[T]) (ctrl.Result, error)
+    
+    // SyncToVirtual is called when a host object exists but the virtual object does not exist
+    SyncToVirtual(ctx *synccontext.SyncContext, event *synccontext.SyncToVirtualEvent[T]) (ctrl.Result, error)
+}
+```
+
+**Generic Translator**
+
+Handles name translation between virtual and host clusters. Virtual cluster resources are typically translated to host cluster resources with prefixed names to avoid conflicts.
+
+### Sync Operations
+
+The syncer performs three types of operations:
+
+1. **SyncToHost**: Creates or updates a host resource based on a virtual resource
+2. **SyncToVirtual**: Creates or updates a virtual resource based on a host resource (for imported resources)
+3. **Sync**: Bidirectional sync when both resources exist
+
+### Name Translation
+
+Resources synced from virtual to host are name-translated to prevent conflicts:
+
+- **Namespace-scoped resources**: `<vcluster-name>-<namespace>-<name>-x-<namespace>-x-<vcluster-name>`
+- **Cluster-scoped resources**: Resources are typically not synced unless explicitly configured
+
+Annotations are added to track the relationship:
+- `vcluster.loft.sh/name`: Original virtual cluster name
+- `vcluster.loft.sh/namespace`: Original virtual cluster namespace
+- `vcluster.loft.sh/uid`: Virtual cluster resource UID
+
+## Syncing Directions
+
+vCluster supports two primary syncing directions:
+
+### To Host (Virtual → Host)
+
+Resources created in the virtual cluster are synced to the host cluster. This is the primary direction for workload resources.
+
+**Common to-host resources:**
+- Pods (enabled by default)
+- Services (enabled by default)
+- Endpoints and EndpointSlices (enabled by default)
+- PersistentVolumeClaims (enabled by default)
+- ConfigMaps and Secrets (selective sync by default)
+- Ingresses (disabled by default)
+- NetworkPolicies (disabled by default)
+
+### From Host (Host → Virtual)
+
+Resources from the host cluster are synced into the virtual cluster. This is primarily used for cluster-level resources that workloads need to discover.
+
+**Common from-host resources:**
+- Events (enabled by default)
+- Nodes (fake nodes by default, real nodes optional)
+- StorageClasses (auto-enabled with scheduler)
+- CSI resources (auto-enabled with scheduler)
+- IngressClasses (disabled by default)
+
+## Default Synced Resources
+
+By default, vCluster syncs these resources:
+
+### To Host (Enabled)
+```yaml
+sync:
+  toHost:
+    services:
+      enabled: true
+    endpoints:
+      enabled: true
+    endpointSlices:
+      enabled: true
+    persistentVolumeClaims:
+      enabled: true
+    configMaps:
+      enabled: true
+      all: false  # Only used configmaps
+    secrets:
+      enabled: true
+      all: false  # Only used secrets
+    pods:
+      enabled: true
+```
+
+### From Host (Enabled)
+```yaml
+sync:
+  fromHost:
+    events:
+      enabled: true
+    csiDrivers:
+      enabled: auto  # Enabled with virtual scheduler
+    csiNodes:
+      enabled: auto
+    csiStorageCapacities:
+      enabled: auto
+    storageClasses:
+      enabled: auto
+```
+
+## Object Caching
+
+For performance, the syncer implements object caching (`pkg/syncer/syncer.go:39`):
+
+```go
+type SyncController struct {
+    objectCache *synccontext.BidirectionalObjectCache
+    // ... other fields
+}
+```
+
+This cache stores the previous state of objects to efficiently detect changes and avoid unnecessary updates.
+
+## UID Validation
+
+The syncer validates that synced resources maintain UID consistency (`pkg/syncer/syncer.go:209`):
+
+- If a host object's UID annotation doesn't match the virtual object's UID, the host object is deleted
+- This prevents stale resources from persisting after recreation
+- Can be disabled with `DisableUIDDeletion` option
+
+## Reconciliation Flow
+
+When a resource changes, the syncer follows this flow:
+
+1. **Retrieve objects**: Get both virtual and host versions
+2. **Check resource versions**: Ensure we're working with latest data
+3. **Validate UID**: Ensure UID consistency
+4. **Determine operation**:
+   - Both exist → **Sync**
+   - Only virtual exists → **SyncToHost**
+   - Only host exists → **SyncToVirtual**
+5. **Execute sync**: Apply the appropriate transformation
+6. **Update cache**: Store new state for future comparisons
+
+## Configuration
+
+Syncing behavior is configured in `values.yaml` under the `sync` section:
+
+```yaml
+sync:
+  toHost:
+    # Resources to sync from virtual to host
+  fromHost:
+    # Resources to sync from host to virtual
+```
+
+See the [To Host](/syncing/to-host) and [From Host](/syncing/from-host) pages for detailed configuration options.
+
+## Performance Considerations
+
+- **Selective ConfigMaps/Secrets**: By default, only ConfigMaps and Secrets used by Pods are synced
+- **Object Caching**: Enabled for most resources to reduce API calls
+- **Concurrent Reconciliation**: Up to 10 concurrent reconciles per controller
+- **Resource Version Checking**: Prevents stale object conflicts
+
+## Next Steps
+
+- Learn about [syncing to the host cluster](/syncing/to-host)
+- Learn about [syncing from the host cluster](/syncing/from-host)
+- Configure [custom resource syncing](/syncing/custom-resources)

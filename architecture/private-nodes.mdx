@@ -1,0 +1,909 @@
+---
+title: Private Nodes Architecture
+description: Complete CNI/CSI isolation with external nodes joining the virtual cluster directly
+---
+
+Private nodes architecture provides the highest level of isolation by allowing external nodes to join the virtual cluster directly with their own CNI (Container Network Interface), CSI (Container Storage Interface), and networking stack. This mode eliminates dependency on the host cluster's infrastructure for workload execution.
+
+<Info>
+  **Introduced in v0.27**: Private nodes is a Pro feature that requires a vCluster Pro license.
+</Info>
+
+## How It Works
+
+In private nodes mode, the vCluster control plane runs in a host cluster namespace (or standalone), but workload nodes join the virtual cluster directly via Konnectivity tunnels. These nodes have their own CNI, CSI, and can be completely isolated from the host cluster:
+
+```
+┌────────────────── Host Cluster ────────────────────┐
+│                                                      │
+│   ┌────────────────────────────────────────┐   │
+│   │ Namespace: vcluster-my-vcluster      │   │
+│   │                                          │   │
+│   │  ┌─────────────────────────────────┐ │   │
+│   │  │ vCluster Control Plane        │ │   │
+│   │  │  - API Server                  │ │   │
+│   │  │  - Syncer                      │ │   │
+│   │  │  - Konnectivity Server         │ │   │
+│   │  │  - Cloud Controller Manager    │ │   │
+│   │  └─────────────────────────────────┘ │   │
+│   │                                          │   │
+│   │  ┌─────────────────────────────────┐ │   │
+│   │  │ Service: NodePort/LB          │ │   │
+│   │  │  (Exposed API Server)          │ │   │
+│   │  └─────────────────────────────────┘ │   │
+│   └────────────────────────────────────────┘   │
+│                                                      │
+└──────────────────────────────────────────────────────┘
+                        │
+                        │ Konnectivity Tunnel
+                        │ (Reverse Proxy)
+                        │
+    ┌─────────────────┼────────────────────┐
+    │                │                      │
+    ▼                ▼                      ▼
+┌──────────────────────────────────────────────────────┐
+│            Private Nodes (External)              │
+│                                                   │
+│  ┌───────────────────────────────────────────┐  │
+│  │ Node 1 (Bare Metal / VM / Cloud)    │  │
+│  │  - Kubelet                            │  │
+│  │  - Konnectivity Agent                 │  │
+│  │  - CNI: Flannel/Calico/Cilium/Custom  │  │
+│  │  - CSI: Local/NFS/Custom              │  │
+│  │  - Kube-proxy                         │  │
+│  │  - Container Runtime (containerd)     │  │
+│  └───────────────────────────────────────────┘  │
+│                                                   │
+│  ┌───────────────────────────────────────────┐  │
+│  │ Node 2 (Bare Metal / VM / Cloud)    │  │
+│  │  (Same components as Node 1)          │  │
+│  └───────────────────────────────────────────┘  │
+│                                                   │
+└──────────────────────────────────────────────────────┘
+    Can be anywhere: AWS, Azure, GCP, bare metal,
+    on-prem, edge locations, different networks
+```
+
+### Key Characteristics
+
+<Check>**Complete Isolation**: Own CNI, CSI, and networking stack</Check>
+<Check>**No Host Dependencies**: Workloads don't touch host infrastructure</Check>
+<Check>**Konnectivity**: Reverse tunnel for secure control plane communication</Check>
+<Check>**Cloud Controller Manager**: Manages node IPs and provider metadata</Check>
+<Check>**Flexible Networking**: Any CNI plugin (Flannel, Calico, Cilium, etc.)</Check>
+<Check>**Flexible Storage**: Any CSI driver or local storage</Check>
+<Check>**Location Independence**: Nodes can be anywhere with network connectivity</Check>
+
+## Configuration
+
+### Basic Configuration
+
+```yaml private-nodes.yaml
+# Enable private nodes mode
+privateNodes:
+  enabled: true
+
+# Expose control plane for node joining
+controlPlane:
+  service:
+    spec:
+      type: NodePort  # or LoadBalancer
+
+# Configure pod CIDR for the virtual cluster
+networking:
+  podCIDR: "10.244.0.0/16"
+
+# Disable host node syncing
+sync:
+  fromHost:
+    nodes:
+      enabled: false
+
+# Deploy CNI and local storage
+deploy:
+  cni:
+    flannel:
+      enabled: true
+  localPathProvisioner:
+    enabled: true
+```
+
+### Create Private Nodes vCluster
+
+<Steps>
+  <Step title="Create the vCluster">
+    ```bash
+    vcluster create my-vcluster \
+      --namespace team-x \
+      --values private-nodes.yaml
+    ```
+  </Step>
+
+  <Step title="Get Join Token">
+    ```bash
+    # Get the join command
+    vcluster node join my-vcluster --namespace team-x --print
+    ```
+
+    This outputs a `kubeadm join` style command with the necessary tokens and endpoint.
+  </Step>
+
+  <Step title="Join Nodes">
+    On each external machine you want to add as a node:
+
+    ```bash
+    # Install vcluster binary on the node
+    curl -L -o vcluster "https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-linux-amd64"
+    chmod +x vcluster
+    sudo mv vcluster /usr/local/bin/
+
+    # Join the node
+    sudo vcluster node join \
+      --api-server https://my-vcluster.example.com:6443 \
+      --token <join-token> \
+      --ca-cert-hash sha256:<hash>
+    ```
+  </Step>
+
+  <Step title="Verify Nodes">
+    ```bash
+    vcluster connect my-vcluster --namespace team-x
+    kubectl get nodes
+    # NAME          STATUS   ROLES    AGE   VERSION
+    # private-node-1   Ready    <none>   2m    v1.28.0
+    ```
+  </Step>
+</Steps>
+
+## Konnectivity
+
+Konnectivity provides a secure reverse tunnel from private nodes to the control plane:
+
+### How Konnectivity Works
+
+1. **Konnectivity Server**: Runs in the control plane (StatefulSet)
+2. **Konnectivity Agent**: Runs on each private node
+3. **Tunnel**: Agent establishes long-lived connection to server
+4. **Reverse Proxy**: Control plane communicates with nodes through tunnel
+
+### Benefits
+
+<Check>**Firewall Friendly**: Nodes initiate connection (outbound only)</Check>
+<Check>**NAT Traversal**: Works behind NAT and firewalls</Check>
+<Check>**Secure**: Mutual TLS authentication</Check>
+<Check>**Resilient**: Automatic reconnection</Check>
+
+### Configuration
+
+Konnectivity is automatically configured when private nodes are enabled:
+
+```yaml
+controlPlane:
+  advanced:
+    konnectivity:
+      server:
+        enabled: true  # Auto-enabled with privateNodes
+        extraArgs: []
+      agent:
+        enabled: true
+        replicas: 1
+```
+
+<Note>
+  The Konnectivity agent runs on each private node automatically during the join process.
+</Note>
+
+## Networking
+
+### Pod Network (CNI)
+
+Private nodes use their own CNI plugin, independent of the host cluster:
+
+<Tabs>
+  <Tab title="Flannel (Default)">
+    ```yaml
+    deploy:
+      cni:
+        flannel:
+          enabled: true
+    
+    networking:
+      podCIDR: "10.244.0.0/16"
+    ```
+
+    **Characteristics:**
+    - Simple overlay network
+    - Works across any infrastructure
+    - UDP or VXLAN backend
+  </Tab>
+
+  <Tab title="Calico">
+    ```yaml
+    deploy:
+      cni:
+        flannel:
+          enabled: false
+    
+    networking:
+      podCIDR: "192.168.0.0/16"
+    ```
+
+    Then install Calico manually in the virtual cluster:
+
+    ```bash
+    kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+    ```
+
+    **Characteristics:**
+    - Advanced network policies
+    - BGP routing
+    - Better performance
+  </Tab>
+
+  <Tab title="Cilium">
+    ```yaml
+    deploy:
+      cni:
+        flannel:
+          enabled: false
+    
+    networking:
+      podCIDR: "10.0.0.0/16"
+    ```
+
+    Install Cilium:
+
+    ```bash
+    cilium install --cluster-name my-vcluster
+    ```
+
+    **Characteristics:**
+    - eBPF-based
+    - Service mesh features
+    - Advanced observability
+  </Tab>
+
+  <Tab title="Custom CNI">
+    ```yaml
+    deploy:
+      cni:
+        flannel:
+          enabled: false
+    
+    networking:
+      podCIDR: "<your-cidr>"
+    ```
+
+    Install any CNI plugin of your choice in the virtual cluster.
+  </Tab>
+</Tabs>
+
+### Service Network
+
+Services get IPs from the virtual cluster's service CIDR:
+
+```yaml
+networking:
+  services:
+    cidr: "10.96.0.0/12"  # Independent service network
+```
+
+### Kube-proxy
+
+Kube-proxy handles service load balancing on each node:
+
+```yaml
+deploy:
+  kubeProxy:
+    enabled: true
+    config:
+      mode: "iptables"  # or ipvs
+```
+
+### Load Balancer Services
+
+For bare metal, use MetalLB:
+
+```yaml
+deploy:
+  metallb:
+    enabled: true
+    ipAddressPool:
+      addresses:
+        - 192.168.1.100-192.168.1.200
+      l2Advertisement: true
+```
+
+## Storage
+
+Private nodes have complete storage independence:
+
+### Local Path Provisioner (Default)
+
+```yaml
+deploy:
+  localPathProvisioner:
+    enabled: true
+```
+
+Provides local storage on each node:
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data
+spec:
+  storageClassName: local-path
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+```
+
+### Custom CSI Drivers
+
+Install any CSI driver directly in the virtual cluster:
+
+<Tabs>
+  <Tab title="NFS CSI">
+    ```bash
+    helm install csi-driver-nfs \
+      csi-driver-nfs/csi-driver-nfs \
+      --namespace kube-system
+    ```
+  </Tab>
+
+  <Tab title="Longhorn">
+    ```bash
+    kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/master/deploy/longhorn.yaml
+    ```
+  </Tab>
+
+  <Tab title="Cloud Provider CSI">
+    ```bash
+    # Example: AWS EBS CSI
+    kubectl apply -k "github.com/kubernetes-sigs/aws-ebs-csi-driver/deploy/kubernetes/overlays/stable/?ref=master"
+    ```
+  </Tab>
+</Tabs>
+
+## Use Cases
+
+### Compliance and Regulatory
+
+**Perfect for:** PCI-DSS, HIPAA, SOC 2, FedRAMP requirements
+
+```yaml
+privateNodes:
+  enabled: true
+
+controlPlane:
+  service:
+    spec:
+      type: LoadBalancer
+      annotations:
+        service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+
+networking:
+  podCIDR: "10.0.0.0/16"  # Isolated network
+
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      publicEgress:
+        enabled: false  # Block internet egress
+```
+
+**Benefits:**
+- Complete network isolation
+- Data never touches shared infrastructure
+- Clear security boundaries
+- Audit-friendly architecture
+
+### GPU Cloud Providers
+
+**Perfect for:** Managed Kubernetes for GPU workloads, AI/ML platforms
+
+```yaml
+privateNodes:
+  enabled: true
+
+controlPlane:
+  service:
+    spec:
+      type: LoadBalancer  # Customer accessible
+
+networking:
+  podCIDR: "10.244.0.0/16"
+
+deploy:
+  cni:
+    flannel:
+      enabled: true
+```
+
+**Node Setup:**
+```bash
+# On GPU server
+sudo vcluster node join \
+  --api-server https://customer-123.gpucloud.example.com:6443 \
+  --token <token> \
+  --ca-cert-hash sha256:<hash>
+
+# Install NVIDIA GPU operator in virtual cluster
+kubectl apply -f https://raw.githubusercontent.com/NVIDIA/gpu-operator/master/deployments/gpu-operator.yaml
+```
+
+**Real-World Impact:**
+<Card title="CoreWeave" icon="rocket">
+  CoreWeave uses vCluster with private nodes to provide managed Kubernetes for GPU workloads. Each customer gets a complete isolated cluster on dedicated GPU nodes.
+</Card>
+
+### Hybrid and Multi-Cloud
+
+**Perfect for:** Bursting to cloud, disaster recovery, multi-region deployments
+
+```yaml
+privateNodes:
+  enabled: true
+  vpn:
+    enabled: true  # Connect nodes across networks
+    nodeToNode:
+      enabled: true
+
+controlPlane:
+  service:
+    spec:
+      type: LoadBalancer
+```
+
+**Scenario**: Control plane in AWS, private nodes in on-prem + Azure:
+
+```bash
+# On-prem nodes
+sudo vcluster node join --api-server https://control-plane.aws.example.com:6443 ...
+
+# Azure nodes
+sudo vcluster node join --api-server https://control-plane.aws.example.com:6443 ...
+```
+
+### Bare Metal Kubernetes
+
+**Perfect for:** Edge computing, on-premises, high-performance computing
+
+```yaml
+privateNodes:
+  enabled: true
+
+controlPlane:
+  service:
+    spec:
+      type: NodePort
+
+deploy:
+  cni:
+    flannel:
+      enabled: true
+  metallb:
+    enabled: true
+    ipAddressPool:
+      addresses:
+        - 10.1.0.100-10.1.0.200
+```
+
+## Advanced Configuration
+
+### Auto-Upgrade Nodes
+
+Automatically upgrade private nodes:
+
+```yaml
+privateNodes:
+  enabled: true
+  autoUpgrade:
+    enabled: true
+    concurrency: 1  # Upgrade one node at a time
+```
+
+### Kubelet Configuration
+
+Customize kubelet settings:
+
+```yaml
+privateNodes:
+  enabled: true
+  kubelet:
+    config:
+      maxPods: 200
+      imageGCHighThresholdPercent: 85
+      imageGCLowThresholdPercent: 80
+      evictionHard:
+        memory.available: "100Mi"
+        nodefs.available: "10%"
+```
+
+### Container Runtime
+
+Configure containerd:
+
+```yaml
+privateNodes:
+  enabled: true
+  joinNode:
+    containerd:
+      enabled: true
+```
+
+### VPN for Node-to-Node Communication
+
+Enable Tailscale-powered VPN:
+
+```yaml
+privateNodes:
+  enabled: true
+  vpn:
+    enabled: true
+    nodeToNode:
+      enabled: true
+```
+
+<Note>
+  **Introduced in v0.30**: VPN integration requires vCluster Platform connection.
+</Note>
+
+## Performance Characteristics
+
+### Resource Overhead
+
+**Control Plane:**
+- CPU: 200-500m
+- Memory: 512MB-2GB
+- Konnectivity: +50m CPU, +128MB memory
+
+**Per Node:**
+- Kubelet: ~100m CPU, ~100MB memory
+- Konnectivity Agent: ~50m CPU, ~64MB memory
+- CNI: 20-50m CPU, 50-200MB memory (varies by plugin)
+- Kube-proxy: ~50m CPU, ~64MB memory
+
+### Network Performance
+
+| Metric | Performance |
+|--------|-------------|
+| Pod-to-Pod (same node) | Near-native (CNI dependent) |
+| Pod-to-Pod (different nodes) | CNI dependent (overlay ~5-10% overhead) |
+| Control plane latency | +5-20ms (Konnectivity overhead) |
+| Node-to-control plane | Variable (depends on location) |
+
+### Scaling Limits
+
+| Metric | Private Nodes |
+|--------|---------------|
+| Nodes per vCluster | 1-5000+ |
+| Pods per node | Up to 200 (configurable) |
+| Pods per vCluster | 1000s (CNI dependent) |
+| Geographic distribution | Global |
+
+## Troubleshooting
+
+### Node Not Joining
+
+**Symptom**: Node fails to join the cluster
+
+```bash
+# Check Konnectivity agent logs on the node
+journalctl -u vcluster-node -f
+
+# Common issues:
+# 1. Cannot reach API server (firewall/network)
+# 2. Invalid token
+# 3. CA cert mismatch
+```
+
+**Solution**:
+
+```bash
+# Verify API server is reachable
+curl -k https://<api-server>:6443
+
+# Regenerate join command
+vcluster node join my-vcluster --namespace team-x --print
+
+# Check control plane service
+kubectl get svc -n team-x
+```
+
+### Konnectivity Issues
+
+**Symptom**: Nodes join but control plane can't communicate with them
+
+```bash
+# Check Konnectivity server logs
+kubectl logs -n team-x <vcluster-pod> -c konnectivity-server
+
+# Check agent status on node
+sudo systemctl status vcluster-node
+```
+
+**Solution**:
+
+```bash
+# Restart Konnectivity on node
+sudo systemctl restart vcluster-node
+
+# Check firewall rules
+sudo iptables -L -n | grep 8132
+```
+
+### Networking Issues
+
+**Symptom**: Pods can't communicate
+
+```bash
+# Check CNI is running
+kubectl get pods -n kube-system -l k8s-app=kube-flannel
+
+# Check pod CIDR configuration
+kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
+
+# Test pod networking
+kubectl run test-1 --image=nginx
+kubectl run test-2 --image=nginx
+kubectl exec test-1 -- ping <test-2-ip>
+```
+
+### Storage Issues
+
+**Symptom**: PVCs not binding
+
+```bash
+# Check storage provisioner
+kubectl get pods -n kube-system -l app.kubernetes.io/name=local-path-provisioner
+
+# Check storage class
+kubectl get storageclass
+
+# Check PVC events
+kubectl describe pvc <pvc-name>
+```
+
+## Security Considerations
+
+### Control Plane Exposure
+
+The control plane must be network-accessible to private nodes:
+
+<Tabs>
+  <Tab title="Internal LoadBalancer (Recommended)">
+    ```yaml
+    controlPlane:
+      service:
+        spec:
+          type: LoadBalancer
+          annotations:
+            service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+    ```
+
+    Only accessible within your VPC/network.
+  </Tab>
+
+  <Tab title="NodePort with Firewall">
+    ```yaml
+    controlPlane:
+      service:
+        spec:
+          type: NodePort
+    ```
+
+    Restrict access via firewall rules to known IPs.
+  </Tab>
+
+  <Tab title="Public with mTLS">
+    ```yaml
+    controlPlane:
+      service:
+        spec:
+          type: LoadBalancer
+    ```
+
+    Konnectivity uses mutual TLS for authentication.
+  </Tab>
+</Tabs>
+
+### Node Authentication
+
+Join tokens are time-limited and single-use:
+
+```bash
+# Generate new token (valid for 24 hours)
+vcluster node join my-vcluster --namespace team-x --print
+
+# Tokens are automatically rotated after use
+```
+
+### Network Policies
+
+Enforce strict network policies:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      publicEgress:
+        enabled: false
+      egress:
+        - to:
+            - podSelector: {}  # Only same vCluster
+```
+
+## Pros and Cons
+
+### Advantages
+
+<Check>**Complete Isolation**: Full CNI, CSI, and network independence</Check>
+<Check>**Any CNI/CSI**: Use any networking or storage solution</Check>
+<Check>**Compliance**: Meets strictest regulatory requirements</Check>
+<Check>**Location Flexibility**: Nodes anywhere with connectivity</Check>
+<Check>**No Host Dependencies**: Zero reliance on host infrastructure</Check>
+<Check>**Hybrid/Multi-Cloud**: Seamlessly span cloud and on-prem</Check>
+<Check>**Better Security**: Clear isolation boundaries</Check>
+
+### Limitations
+
+<Warning>**Higher Complexity**: More components to manage</Warning>
+<Warning>**Latency**: Konnectivity adds network hop</Warning>
+<Warning>**Node Management**: Must provision and maintain nodes</Warning>
+<Warning>**Initial Setup**: More complex than shared/dedicated</Warning>
+<Warning>**Pro License**: Requires vCluster Pro</Warning>
+
+### Comparison
+
+| Aspect | Dedicated Nodes | Private Nodes |
+|--------|:---------------:|:-------------:|
+| Network Isolation | ❌ | ✅ |
+| Storage Isolation | ❌ | ✅ |
+| Custom CNI | ❌ | ✅ |
+| Custom CSI | ❌ | ✅ |
+| Location Flexibility | ❌ | ✅ |
+| Setup Complexity | Medium | High |
+| License | OSS | Pro |
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Secure Control Plane Access" icon="lock">
+    Use internal load balancers and restrict access:
+
+    ```yaml
+    controlPlane:
+      service:
+        spec:
+          type: LoadBalancer
+          loadBalancerSourceRanges:
+            - 10.0.0.0/8    # Internal network only
+            - 172.16.0.0/12
+    ```
+  </Accordion>
+
+  <Accordion title="Monitor Node Health" icon="heart-pulse">
+    Set up monitoring for private nodes:
+
+    ```yaml
+    # Deploy metrics-server
+    deploy:
+      metricsServer:
+        enabled: true
+    ```
+
+    ```bash
+    # Monitor node resources
+    kubectl top nodes
+    ```
+  </Accordion>
+
+  <Accordion title="Automate Node Provisioning" icon="robot">
+    Use infrastructure as code:
+
+    ```bash
+    # Example: Terraform + cloud-init
+    resource "aws_instance" "vcluster_node" {
+      user_data = <<-EOF
+        #!/bin/bash
+        curl -L -o vcluster https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-linux-amd64
+        chmod +x vcluster && sudo mv vcluster /usr/local/bin/
+        sudo vcluster node join --api-server ${var.api_server} ...
+      EOF
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Plan for Node Failures" icon="shield">
+    Enable auto-upgrade and monitoring:
+
+    ```yaml
+    privateNodes:
+      autoUpgrade:
+        enabled: true
+        concurrency: 1
+    ```
+
+    Use multiple nodes for critical workloads:
+
+    ```yaml
+    replicas: 3  # Spread across nodes
+    ```
+  </Accordion>
+
+  <Accordion title="Use VPN for Multi-Region" icon="network-wired">
+    When nodes span multiple networks:
+
+    ```yaml
+    privateNodes:
+      vpn:
+        enabled: true
+        nodeToNode:
+          enabled: true
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Migration
+
+### From Dedicated to Private Nodes
+
+<Steps>
+  <Step title="Create New vCluster with Private Nodes">
+    ```bash
+    vcluster create my-vcluster-v2 \
+      --namespace team-x-v2 \
+      --values private-nodes.yaml
+    ```
+  </Step>
+
+  <Step title="Join Private Nodes">
+    Provision new nodes and join them to the new vCluster.
+  </Step>
+
+  <Step title="Migrate Workloads">
+    Use Velero or kubectl to migrate resources:
+
+    ```bash
+    # Export from old
+    kubectl get all -A -o yaml > resources.yaml
+    
+    # Import to new
+    kubectl apply -f resources.yaml
+    ```
+  </Step>
+
+  <Step title="Update DNS/Ingress">
+    Point traffic to new vCluster.
+  </Step>
+
+  <Step title="Decommission Old vCluster">
+    ```bash
+    vcluster delete my-vcluster --namespace team-x
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Auto Nodes" icon="wand-magic-sparkles" href="/architecture/auto-nodes">
+    Add Karpenter-powered autoscaling to private nodes.
+  </Card>
+  <Card title="Standalone Mode" icon="microchip" href="/architecture/standalone-mode">
+    Run vCluster without any host cluster.
+  </Card>
+  <Card title="VPN Integration" icon="network-wired" href="/vcluster/configure/vcluster-yaml/private-nodes/vpn">
+    Configure VPN for node-to-node communication.
+  </Card>
+  <Card title="Node Management" icon="server" href="/vcluster/configure/vcluster-yaml/private-nodes/join-node">
+    Advanced node joining and configuration options.
+  </Card>
+</CardGroup>

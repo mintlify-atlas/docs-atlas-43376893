@@ -1,0 +1,471 @@
+---
+title: Storage Options
+description: Configure persistent storage, volume snapshots, and storage classes
+---
+
+Storage configuration in vCluster controls how persistent data is managed, including volumes, storage classes, and snapshots for both the control plane and workloads.
+
+## Control Plane Persistence
+
+<ParamField path="controlPlane.statefulSet.persistence" type="object">
+  Persistence configuration for the vCluster control plane StatefulSet.
+
+  <Expandable title="properties">
+    <ParamField path="volumeClaim" type="object">
+      Persistent volume claim configuration.
+      
+      <Expandable title="properties">
+        <ParamField path="enabled" type="string" default="auto">
+          Enable persistent volume claim. `auto` determines based on distro and backing store.
+          - `true`: Always create a PVC
+          - `false`: Never create a PVC
+          - `auto`: Automatically determine based on configuration
+        </ParamField>
+        
+        <ParamField path="size" type="string" default="5Gi">
+          Storage size for the PVC.
+        </ParamField>
+        
+        <ParamField path="storageClass" type="string">
+          Storage class name. If empty, uses the default storage class.
+        </ParamField>
+        
+        <ParamField path="accessModes" type="array" default='["ReadWriteOnce"]'>
+          Access modes for the PVC.
+        </ParamField>
+        
+        <ParamField path="retentionPolicy" type="string" default="Retain">
+          Volume retention policy when the StatefulSet is deleted.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="volumeClaimTemplates" type="array">
+      Additional volume claim templates for the StatefulSet.
+    </ParamField>
+
+    <ParamField path="addVolumes" type="array">
+      Extra volumes for the pod.
+      
+      ```yaml
+      addVolumes:
+        - name: custom-config
+          configMap:
+            name: my-config
+      ```
+    </ParamField>
+
+    <ParamField path="addVolumeMounts" type="array">
+      Extra volume mounts for the container.
+      
+      ```yaml
+      addVolumeMounts:
+        - name: custom-config
+          mountPath: /config
+          readOnly: true
+      ```
+    </ParamField>
+
+    <ParamField path="dataVolume" type="array">
+      Override the default data volume. Only works if `volumeClaim.enabled=false`.
+    </ParamField>
+
+    <ParamField path="binariesVolume" type="array">
+      Volume for distro-specific executables. This volume doesn't need to be persistent.
+      
+      Default:
+      ```yaml
+      binariesVolume:
+        - name: binaries
+          emptyDir: {}
+      ```
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Etcd Persistence
+
+<ParamField path="controlPlane.backingStore.etcd.deploy.statefulSet.persistence" type="object">
+  Persistence configuration for deployed etcd.
+
+  <Expandable title="properties">
+    <ParamField path="volumeClaim" type="object">
+      Persistent volume claim for etcd.
+      
+      <Expandable title="properties">
+        <ParamField path="enabled" type="boolean" default="true">
+          Enable persistent volume claim for etcd.
+        </ParamField>
+        
+        <ParamField path="size" type="string" default="5Gi">
+          Storage size for etcd PVC.
+        </ParamField>
+        
+        <ParamField path="storageClass" type="string">
+          Storage class for etcd.
+        </ParamField>
+        
+        <ParamField path="accessModes" type="array" default='["ReadWriteOnce"]'>
+          Access modes for etcd PVC.
+        </ParamField>
+        
+        <ParamField path="retentionPolicy" type="string" default="Retain">
+          Retention policy for etcd volumes.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="addVolumes" type="array">
+      Extra volumes for etcd pods.
+    </ParamField>
+
+    <ParamField path="addVolumeMounts" type="array">
+      Extra volume mounts for etcd containers.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Workload Storage Syncing
+
+<ParamField path="sync.toHost.persistentVolumeClaims" type="object">
+  Sync PersistentVolumeClaims from virtual cluster to host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable PVC syncing to host cluster.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.persistentVolumes" type="object">
+  Sync PersistentVolumes from virtual cluster to host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable PV syncing to host cluster.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.storageClasses" type="object">
+  Sync StorageClasses from virtual cluster to host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable StorageClass syncing to host cluster.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.fromHost.storageClasses" type="object">
+  Sync StorageClasses from host to virtual cluster.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="string" default="auto">
+      Enable StorageClass syncing from host. `auto` enables when virtual scheduler is enabled.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Volume Snapshots
+
+<ParamField path="sync.toHost.volumeSnapshots" type="object">
+  Sync VolumeSnapshots from virtual cluster to host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable VolumeSnapshot syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.toHost.volumeSnapshotContents" type="object">
+  Sync VolumeSnapshotContents from virtual cluster to host.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable VolumeSnapshotContent syncing.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.fromHost.volumeSnapshotClasses" type="object">
+  Sync VolumeSnapshotClasses from host to virtual cluster.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable VolumeSnapshotClass syncing from host.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="deploy.volumeSnapshotController" type="object">
+  Deploy CSI volume snapshot controller.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable deployment of volume snapshot controller.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="rbac.enableVolumeSnapshotRules" type="object">
+  Enable RBAC rules for volume snapshots.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="string" default="auto">
+      Enable volume snapshot RBAC rules. `auto` enables when volume snapshot syncing is enabled.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## CSI Storage
+
+<ParamField path="sync.fromHost.csiDrivers" type="object">
+  Sync CSIDrivers from host to virtual cluster.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="string" default="auto">
+      Enable CSIDriver syncing. `auto` enables when virtual scheduler is enabled.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.fromHost.csiNodes" type="object">
+  Sync CSINodes from host to virtual cluster.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="string" default="auto">
+      Enable CSINode syncing. `auto` enables when virtual scheduler is enabled.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sync.fromHost.csiStorageCapacities" type="object">
+  Sync CSIStorageCapacities from host to virtual cluster.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="string" default="auto">
+      Enable CSIStorageCapacity syncing. `auto` enables when virtual scheduler is enabled.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Local Path Provisioner
+
+<ParamField path="deploy.localPathProvisioner" type="object">
+  Deploy local path provisioner for local storage.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable local path provisioner deployment.
+    </ParamField>
+
+    <ParamField path="image" type="string">
+      Image for local path provisioner.
+    </ParamField>
+
+    <ParamField path="imagePullPolicy" type="string">
+      Image pull policy.
+    </ParamField>
+
+    <ParamField path="nodePath" type="string">
+      Path on the node where persistent volume directories are created.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Example: Control Plane with Custom Storage
+
+```yaml
+controlPlane:
+  statefulSet:
+    persistence:
+      volumeClaim:
+        enabled: true
+        size: 20Gi
+        storageClass: fast-ssd
+        retentionPolicy: Retain
+```
+
+## Example: Etcd with Persistent Storage
+
+```yaml
+controlPlane:
+  backingStore:
+    etcd:
+      deploy:
+        enabled: true
+        statefulSet:
+          persistence:
+            volumeClaim:
+              enabled: true
+              size: 10Gi
+              storageClass: fast-storage
+```
+
+## Example: Enable Volume Snapshots
+
+```yaml
+# Enable volume snapshot syncing
+sync:
+  toHost:
+    volumeSnapshots:
+      enabled: true
+    volumeSnapshotContents:
+      enabled: true
+  fromHost:
+    volumeSnapshotClasses:
+      enabled: true
+
+# Deploy snapshot controller
+deploy:
+  volumeSnapshotController:
+    enabled: true
+
+# Enable RBAC rules
+rbac:
+  enableVolumeSnapshotRules:
+    enabled: true
+```
+
+## Example: Custom Volumes and Mounts
+
+```yaml
+controlPlane:
+  statefulSet:
+    persistence:
+      addVolumes:
+        - name: custom-ca-certs
+          secret:
+            secretName: ca-certificates
+        - name: config-volume
+          configMap:
+            name: vcluster-config
+      
+      addVolumeMounts:
+        - name: custom-ca-certs
+          mountPath: /etc/ssl/certs/custom
+          readOnly: true
+        - name: config-volume
+          mountPath: /etc/vcluster
+          readOnly: true
+```
+
+## Example: Sync StorageClasses
+
+```yaml
+# Sync storage classes from host to virtual cluster
+sync:
+  fromHost:
+    storageClasses:
+      enabled: true
+    csiDrivers:
+      enabled: true
+    csiNodes:
+      enabled: true
+    csiStorageCapacities:
+      enabled: true
+
+# Enable virtual scheduler to use host storage
+controlPlane:
+  distro:
+    k8s:
+      scheduler:
+        enabled: true
+```
+
+## Example: Local Path Provisioner Configuration
+
+```yaml
+deploy:
+  localPathProvisioner:
+    enabled: true
+    image: rancher/local-path-provisioner:v0.0.24
+    imagePullPolicy: IfNotPresent
+    nodePath: /var/lib/vcluster-storage
+```
+
+## Use Cases
+
+### High Availability with Persistent Storage
+
+```yaml
+controlPlane:
+  statefulSet:
+    highAvailability:
+      replicas: 3
+    persistence:
+      volumeClaim:
+        enabled: true
+        size: 20Gi
+        storageClass: replicated-ssd
+```
+
+### Ephemeral Storage Only
+
+```yaml
+controlPlane:
+  statefulSet:
+    persistence:
+      volumeClaim:
+        enabled: false
+      dataVolume:
+        - name: data
+          emptyDir: {}
+```
+
+### Enable All Storage Features
+
+```yaml
+sync:
+  toHost:
+    persistentVolumeClaims:
+      enabled: true
+    persistentVolumes:
+      enabled: true
+    storageClasses:
+      enabled: true
+    volumeSnapshots:
+      enabled: true
+    volumeSnapshotContents:
+      enabled: true
+  fromHost:
+    storageClasses:
+      enabled: true
+    volumeSnapshotClasses:
+      enabled: true
+    csiDrivers:
+      enabled: true
+    csiNodes:
+      enabled: true
+    csiStorageCapacities:
+      enabled: true
+
+deploy:
+  volumeSnapshotController:
+    enabled: true
+
+rbac:
+  enableVolumeSnapshotRules:
+    enabled: true
+```
+
+## Important Notes
+
+1. **Backing Store Selection**: The choice between embedded database, external database, or etcd affects persistence requirements:
+   - Embedded database (SQLite): Requires persistent volume
+   - External database: No local persistence needed for data (only for binaries)
+   - Etcd: Requires persistent volume for etcd pods
+
+2. **Volume Claim Templates**: Cannot be modified after initial creation. Plan your storage requirements carefully.
+
+3. **Storage Class Changes**: Changing storage classes requires manual PVC migration.
+
+4. **Retention Policy**: Set to `Retain` to preserve data after vCluster deletion.
+
+## Related Configuration
+
+- See [Control Plane](/config/control-plane) for backing store configuration
+- See [Sync Configuration](/config/sync-configuration) for PVC syncing options
+- See [Values Reference](/config/values-reference) for all options

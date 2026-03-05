@@ -1,0 +1,277 @@
+---
+title: "Managing Virtual Clusters"
+description: "Day-to-day operations for managing your virtual clusters"
+---
+
+## Overview
+
+vCluster provides a comprehensive CLI for managing the lifecycle of your virtual clusters. This guide covers the essential day-to-day operations you'll need to effectively manage your vClusters.
+
+## Listing Virtual Clusters
+
+View all virtual clusters in your environment to get an overview of your deployment.
+
+### Basic List Command
+
+```bash
+vcluster list
+```
+
+This command displays all virtual clusters across all namespaces in a table format with key information:
+- Virtual cluster name
+- Namespace
+- Status (Running, Sleeping, etc.)
+- Age
+- Connection status
+
+### List Options
+
+<Tabs>
+  <Tab title="JSON Output">
+    ```bash
+    vcluster list --output json
+    ```
+    
+    Returns structured JSON output for programmatic access or integration with other tools.
+  </Tab>
+  
+  <Tab title="Specific Namespace">
+    ```bash
+    vcluster list --namespace team-dev
+    ```
+    
+    Filter results to a specific namespace.
+  </Tab>
+  
+  <Tab title="Specific Driver">
+    ```bash
+    vcluster list --driver helm
+    ```
+    
+    List virtual clusters managed by a specific driver (helm, platform, or docker).
+  </Tab>
+</Tabs>
+
+## Describing a Virtual Cluster
+
+Get detailed information about a specific virtual cluster.
+
+```bash
+vcluster describe my-vcluster
+```
+
+### Output Formats
+
+<Steps>
+  <Step title="YAML Output">
+    Get the full configuration in YAML format:
+    
+    ```bash
+    vcluster describe my-vcluster -o yaml
+    ```
+    
+    This shows the complete vCluster configuration including all runtime settings.
+  </Step>
+  
+  <Step title="JSON Output">
+    For programmatic access:
+    
+    ```bash
+    vcluster describe my-vcluster -o json
+    ```
+  </Step>
+  
+  <Step title="Configuration Only">
+    Extract just the vcluster.yaml configuration:
+    
+    ```bash
+    vcluster describe my-vcluster --config-only
+    ```
+    
+    Useful for backing up or comparing configurations.
+  </Step>
+</Steps>
+
+## Connecting to a Virtual Cluster
+
+Switch your kubectl context to interact with a virtual cluster.
+
+```bash
+vcluster connect my-vcluster --namespace team-dev
+```
+
+**What happens:**
+1. Creates a port-forward to the virtual cluster's API server
+2. Updates your kubeconfig with a new context
+3. Switches to the new context automatically
+4. You can now use `kubectl` commands against the virtual cluster
+
+<Note>
+  The connection requires the port-forward to remain active. Keep the terminal window open or run with `--background` flag.
+</Note>
+
+## Disconnecting from a Virtual Cluster
+
+Return to your host cluster context.
+
+```bash
+vcluster disconnect
+```
+
+This removes the virtual cluster context and closes any active port-forwards.
+
+## Deleting a Virtual Cluster
+
+Remove a virtual cluster and its resources.
+
+<Warning>
+  Deletion is permanent. Ensure you have backups of any important data before proceeding.
+</Warning>
+
+### Standard Deletion
+
+```bash
+vcluster delete my-vcluster --namespace team-dev
+```
+
+### Force Deletion
+
+If a virtual cluster is stuck or not responding:
+
+```bash
+vcluster delete my-vcluster --namespace team-dev --force
+```
+
+### Deletion with Cleanup
+
+```bash
+vcluster delete my-vcluster --namespace team-dev --delete-namespace
+```
+
+This also removes the host namespace after deleting the virtual cluster.
+
+## Platform Integration
+
+When using vCluster Platform, specify the project context:
+
+```bash
+vcluster list --project my-project
+vcluster describe my-vcluster --project my-project
+vcluster delete my-vcluster --project my-project
+```
+
+## Driver Selection
+
+vCluster supports multiple drivers for different deployment modes:
+
+- **helm**: Direct Helm-based deployment (default)
+- **platform**: vCluster Platform-managed deployment
+- **docker**: Docker-based local development
+
+Set the default driver in your config:
+
+```bash
+vcluster use driver platform
+```
+
+Or specify per-command:
+
+```bash
+vcluster list --driver helm
+```
+
+## Common Management Tasks
+
+<AccordionGroup>
+  <Accordion title="Check Virtual Cluster Status">
+    ```bash
+    vcluster list | grep my-vcluster
+    ```
+    
+    Or for detailed status:
+    
+    ```bash
+    kubectl get vcluster my-vcluster -n team-dev
+    ```
+  </Accordion>
+  
+  <Accordion title="View Virtual Cluster Logs">
+    ```bash
+    kubectl logs -n team-dev -l app=vcluster,release=my-vcluster
+    ```
+    
+    For continuous streaming:
+    
+    ```bash
+    kubectl logs -n team-dev -l app=vcluster,release=my-vcluster -f
+    ```
+  </Accordion>
+  
+  <Accordion title="Update Virtual Cluster Configuration">
+    1. Export current configuration:
+       ```bash
+       vcluster describe my-vcluster --config-only > vcluster.yaml
+       ```
+    
+    2. Edit the configuration file
+    
+    3. Apply changes:
+       ```bash
+       helm upgrade my-vcluster vcluster -n team-dev -f vcluster.yaml
+       ```
+  </Accordion>
+  
+  <Accordion title="Check Resource Usage">
+    View pods in the host namespace:
+    ```bash
+    kubectl top pods -n team-dev
+    ```
+    
+    View resource requests/limits:
+    ```bash
+    kubectl describe statefulset -n team-dev my-vcluster
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<Accordion title="Virtual Cluster Not Responding">
+  **Symptoms:** Commands hang or timeout
+  
+  **Solutions:**
+  1. Check pod status:
+     ```bash
+     kubectl get pods -n team-dev -l release=my-vcluster
+     ```
+  
+  2. Check logs for errors:
+     ```bash
+     kubectl logs -n team-dev -l app=vcluster,release=my-vcluster
+     ```
+  
+  3. Restart the virtual cluster:
+     ```bash
+     kubectl rollout restart statefulset -n team-dev my-vcluster
+     ```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Pause & Resume" icon="pause" href="/operations/pause-resume">
+    Learn how to pause virtual clusters to save resources
+  </Card>
+  
+  <Card title="Snapshots" icon="camera" href="/operations/snapshots">
+    Create point-in-time snapshots of your virtual clusters
+  </Card>
+  
+  <Card title="Monitoring" icon="chart-line" href="/operations/monitoring">
+    Set up monitoring for your virtual clusters
+  </Card>
+  
+  <Card title="Troubleshooting" icon="wrench" href="/operations/troubleshooting">
+    Resolve common issues
+  </Card>
+</CardGroup>

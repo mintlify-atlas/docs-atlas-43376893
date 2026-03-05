@@ -1,0 +1,616 @@
+---
+title: "Backup & Restore"
+description: "Protect and recover your virtual clusters with backup and restore strategies"
+---
+
+## Overview
+
+Backup and restore operations ensure business continuity and data protection for your virtual clusters. vCluster provides snapshot-based backup and restore capabilities that capture the complete state of your virtual environment.
+
+## Understanding Backup vs Snapshot
+
+While closely related, these terms have distinct meanings:
+
+<CardGroup cols={2}>
+  <Card title="Snapshot" icon="camera">
+    A point-in-time capture of cluster state, typically short-term and used for quick recovery or cloning.
+  </Card>
+  
+  <Card title="Backup" icon="floppy-disk">
+    A snapshot intended for long-term retention, disaster recovery, and compliance purposes.
+  </Card>
+</CardGroup>
+
+In practice, both use the same snapshot mechanism - the difference is in retention policy and purpose.
+
+## Creating Backups
+
+### Full Backup (Resources Only)
+
+Create a backup of all Kubernetes resources:
+
+```bash
+vcluster snapshot create my-vcluster \
+  oci://ghcr.io/my-org/backups:my-vcluster-full-$(date +%Y%m%d-%H%M%S) \
+  --namespace production
+```
+
+This captures:
+- All Kubernetes resources (Deployments, StatefulSets, Services, etc.)
+- ConfigMaps and Secrets
+- Custom Resource Definitions and custom resources
+- RBAC policies and service accounts
+- Network policies
+
+### Full Backup (Including Volumes)
+
+Create a complete backup including persistent volume data:
+
+```bash
+vcluster snapshot create my-vcluster \
+  oci://ghcr.io/my-org/backups:my-vcluster-complete-$(date +%Y%m%d-%H%M%S) \
+  --namespace production \
+  --include-volumes
+```
+
+<Note>
+  Volume snapshots require CSI driver support and VolumeSnapshot CRDs installed in the host cluster.
+</Note>
+
+## Restoring from Backup
+
+### Basic Restore
+
+Restore a virtual cluster from a backup:
+
+```bash
+vcluster restore my-vcluster \
+  oci://ghcr.io/my-org/backups:my-vcluster-full-20240115-140530 \
+  --namespace production
+```
+
+<Steps>
+  <Step title="Prepare Virtual Cluster">
+    Ensure the target virtual cluster exists and is running:
+    
+    ```bash
+    vcluster list --namespace production
+    ```
+    
+    If it doesn't exist, create it:
+    
+    ```bash
+    vcluster create my-vcluster --namespace production
+    ```
+  </Step>
+  
+  <Step title="Execute Restore">
+    Run the restore command:
+    
+    ```bash
+    vcluster restore my-vcluster \
+      oci://ghcr.io/my-org/backups:my-vcluster-full-20240115-140530 \
+      --namespace production
+    ```
+  </Step>
+  
+  <Step title="Verify Restoration">
+    Connect to the virtual cluster and verify resources:
+    
+    ```bash
+    vcluster connect my-vcluster --namespace production
+    kubectl get all --all-namespaces
+    ```
+  </Step>
+</Steps>
+
+### Restore with Volumes
+
+Restore including persistent volume data:
+
+```bash
+vcluster restore my-vcluster \
+  oci://ghcr.io/my-org/backups:my-vcluster-complete-20240115-140530 \
+  --namespace production \
+  --restore-volumes
+```
+
+**Important considerations:**
+- Existing data in PVCs will be overwritten
+- Volume restoration can take significant time for large volumes
+- Storage class must support volume snapshots
+
+## Backup Strategies
+
+### Strategy 1: Scheduled Backups
+
+Implement automated daily backups using CronJobs:
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vcluster-daily-backup
+  namespace: backup-system
+spec:
+  # Run daily at 2 AM
+  schedule: "0 2 * * *"
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: vcluster-backup-sa
+          containers:
+          - name: backup
+            image: loftsh/vcluster-cli:latest
+            env:
+            - name: TIMESTAMP
+              value: $(date +%Y%m%d-%H%M%S)
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Starting backup at $(date)"
+              
+              # Backup production vcluster
+              vcluster snapshot create production-vcluster \
+                oci://ghcr.io/my-org/backups:production-${TIMESTAMP} \
+                --namespace production
+              
+              # Backup staging vcluster
+              vcluster snapshot create staging-vcluster \
+                oci://ghcr.io/my-org/backups:staging-${TIMESTAMP} \
+                --namespace staging
+              
+              echo "Backup completed at $(date)"
+          restartPolicy: OnFailure
+```
+
+### Strategy 2: Pre-Change Backups
+
+Create backups before significant changes:
+
+```bash
+#!/bin/bash
+# pre-deployment-backup.sh
+
+VCLUSTER_NAME="production-vcluster"
+NAMESPACE="production"
+BACKUP_REPO="oci://ghcr.io/my-org/backups"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+echo "Creating pre-deployment backup..."
+vcluster snapshot create ${VCLUSTER_NAME} \
+  ${BACKUP_REPO}:${VCLUSTER_NAME}-pre-deploy-${TIMESTAMP} \
+  --namespace ${NAMESPACE}
+
+if [ $? -eq 0 ]; then
+  echo "Backup successful: ${VCLUSTER_NAME}-pre-deploy-${TIMESTAMP}"
+  echo "Proceeding with deployment..."
+  # Run deployment
+  kubectl apply -f deployment.yaml
+else
+  echo "Backup failed! Aborting deployment."
+  exit 1
+fi
+```
+
+### Strategy 3: 3-2-1 Backup Strategy
+
+Implement the industry-standard 3-2-1 rule:
+
+- **3 copies** of your data
+- **2 different storage types**
+- **1 offsite copy**
+
+```bash
+#!/bin/bash
+# 3-2-1-backup.sh
+
+VCLUSTER_NAME="production-vcluster"
+NAMESPACE="production"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+# Copy 1: Primary storage (OCI registry)
+vcluster snapshot create ${VCLUSTER_NAME} \
+  oci://ghcr.io/my-org/backups:${VCLUSTER_NAME}-${TIMESTAMP} \
+  --namespace ${NAMESPACE}
+
+# Copy 2: Secondary storage (S3)
+vcluster snapshot create ${VCLUSTER_NAME} \
+  s3://my-backup-bucket/vclusters/${VCLUSTER_NAME}-${TIMESTAMP}.tar.gz \
+  --namespace ${NAMESPACE}
+
+# Copy 3: Offsite (different region or provider)
+vcluster snapshot create ${VCLUSTER_NAME} \
+  s3://my-dr-bucket/vclusters/${VCLUSTER_NAME}-${TIMESTAMP}.tar.gz \
+  --namespace ${NAMESPACE}
+```
+
+## Recovery Scenarios
+
+<AccordionGroup>
+  <Accordion title="Scenario 1: Accidental Deletion">
+    **Problem:** A critical deployment was accidentally deleted.
+    
+    **Solution: Targeted Restore**
+    
+    1. List recent backups:
+       ```bash
+       # Use your registry's CLI to list backups
+       docker images ghcr.io/my-org/backups
+       ```
+    
+    2. Find the most recent backup before the deletion
+    
+    3. Restore to a temporary cluster:
+       ```bash
+       vcluster create recovery-temp --namespace recovery
+       vcluster restore recovery-temp \
+         oci://ghcr.io/my-org/backups:production-20240115-140530 \
+         --namespace recovery
+       ```
+    
+    4. Extract just the needed resources:
+       ```bash
+       vcluster connect recovery-temp --namespace recovery
+       kubectl get deployment critical-app -o yaml > critical-app.yaml
+       ```
+    
+    5. Restore to production:
+       ```bash
+       vcluster connect production-vcluster --namespace production
+       kubectl apply -f critical-app.yaml
+       ```
+    
+    6. Clean up temporary cluster:
+       ```bash
+       vcluster delete recovery-temp --namespace recovery
+       ```
+  </Accordion>
+  
+  <Accordion title="Scenario 2: Complete Cluster Loss">
+    **Problem:** The entire host cluster or virtual cluster is lost.
+    
+    **Solution: Full Restore**
+    
+    1. Set up new host cluster (if needed)
+    
+    2. Install vCluster:
+       ```bash
+       helm repo add loft https://charts.loft.sh
+       helm repo update
+       ```
+    
+    3. Create new virtual cluster:
+       ```bash
+       vcluster create production-vcluster \
+         --namespace production \
+         --create-namespace
+       ```
+    
+    4. Restore from most recent backup:
+       ```bash
+       vcluster restore production-vcluster \
+         oci://ghcr.io/my-org/backups:production-latest \
+         --namespace production \
+         --restore-volumes
+       ```
+    
+    5. Verify all services are running:
+       ```bash
+       vcluster connect production-vcluster --namespace production
+       kubectl get all --all-namespaces
+       kubectl get pvc --all-namespaces
+       ```
+    
+    6. Update DNS and external access if needed
+  </Accordion>
+  
+  <Accordion title="Scenario 3: Rollback After Failed Update">
+    **Problem:** A Kubernetes version upgrade or major change caused issues.
+    
+    **Solution: Version Rollback**
+    
+    1. Identify the pre-upgrade backup:
+       ```bash
+       # Should have been created before upgrade
+       BACKUP_TAG="production-pre-upgrade-20240115"
+       ```
+    
+    2. Pause the problematic cluster:
+       ```bash
+       vcluster pause production-vcluster --namespace production
+       ```
+    
+    3. Restore from pre-upgrade backup:
+       ```bash
+       vcluster resume production-vcluster --namespace production
+       vcluster restore production-vcluster \
+         oci://ghcr.io/my-org/backups:${BACKUP_TAG} \
+         --namespace production
+       ```
+    
+    4. Verify the rollback:
+       ```bash
+       vcluster connect production-vcluster --namespace production
+       kubectl version
+       kubectl get nodes
+       ```
+  </Accordion>
+  
+  <Accordion title="Scenario 4: Cross-Cluster Migration">
+    **Problem:** Need to move virtual cluster to different infrastructure.
+    
+    **Solution: Backup and Restore Migration**
+    
+    1. Create final backup on source cluster:
+       ```bash
+       kubectl config use-context source-cluster
+       vcluster snapshot create my-vcluster \
+         oci://ghcr.io/my-org/backups:migration-final-$(date +%Y%m%d) \
+         --namespace production
+       ```
+    
+    2. Prepare target cluster:
+       ```bash
+       kubectl config use-context target-cluster
+       kubectl create namespace production
+       ```
+    
+    3. Create virtual cluster on target:
+       ```bash
+       vcluster create my-vcluster \
+         --namespace production \
+         --values vcluster-config.yaml
+       ```
+    
+    4. Restore data:
+       ```bash
+       vcluster restore my-vcluster \
+         oci://ghcr.io/my-org/backups:migration-final-20240115 \
+         --namespace production \
+         --restore-volumes
+       ```
+    
+    5. Update external references (DNS, ingress, etc.)
+    
+    6. Verify migration:
+       ```bash
+       vcluster connect my-vcluster --namespace production
+       # Run your test suite
+       ```
+    
+    7. Decommission source cluster after validation period
+  </Accordion>
+</AccordionGroup>
+
+## Backup Retention and Cleanup
+
+### Manual Cleanup
+
+Remove old backups manually:
+
+```bash
+# For OCI registries
+docker rmi ghcr.io/my-org/backups:production-20231215-140530
+
+# For S3
+aws s3 rm s3://my-backup-bucket/vclusters/production-20231215-140530.tar.gz
+```
+
+### Automated Retention Policy
+
+Implement retention policies in your backup script:
+
+```bash
+#!/bin/bash
+# backup-with-retention.sh
+
+VCLUSTER_NAME="production-vcluster"
+NAMESPACE="production"
+BACKUP_REPO="oci://ghcr.io/my-org/backups"
+RETENTION_DAYS=30
+
+# Create new backup
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+vcluster snapshot create ${VCLUSTER_NAME} \
+  ${BACKUP_REPO}:${VCLUSTER_NAME}-${TIMESTAMP} \
+  --namespace ${NAMESPACE}
+
+# Delete backups older than retention period
+CUTOFF_DATE=$(date -d "${RETENTION_DAYS} days ago" +%Y%m%d)
+
+# List and filter old backups
+for tag in $(docker images ghcr.io/my-org/backups --format "{{.Tag}}" | grep "^${VCLUSTER_NAME}-"); do
+  BACKUP_DATE=$(echo $tag | grep -oP '\d{8}' | head -1)
+  if [ "$BACKUP_DATE" -lt "$CUTOFF_DATE" ]; then
+    echo "Removing old backup: $tag"
+    docker rmi ghcr.io/my-org/backups:$tag
+  fi
+done
+```
+
+## Monitoring and Verification
+
+### Verify Backup Integrity
+
+Test backups regularly to ensure they can be restored:
+
+```bash
+#!/bin/bash
+# verify-backup.sh
+
+BACKUP_TAG="production-20240115-140530"
+TEST_NAMESPACE="backup-verification"
+
+# Create temporary cluster
+vcluster create backup-test --namespace ${TEST_NAMESPACE} --create-namespace
+
+# Attempt restore
+if vcluster restore backup-test \
+  oci://ghcr.io/my-org/backups:${BACKUP_TAG} \
+  --namespace ${TEST_NAMESPACE}; then
+  echo "✓ Backup ${BACKUP_TAG} verified successfully"
+  
+  # Optional: Run smoke tests
+  vcluster connect backup-test --namespace ${TEST_NAMESPACE}
+  # Run your test suite here
+  
+  # Cleanup
+  vcluster delete backup-test --namespace ${TEST_NAMESPACE}
+  kubectl delete namespace ${TEST_NAMESPACE}
+else
+  echo "✗ Backup ${BACKUP_TAG} verification FAILED"
+  exit 1
+fi
+```
+
+### Backup Monitoring Dashboard
+
+Create alerts for backup failures:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-alerts
+  namespace: monitoring
+data:
+  alerts.yaml: |
+    groups:
+    - name: vcluster-backup
+      rules:
+      - alert: BackupJobFailed
+        expr: kube_job_status_failed{job_name=~"vcluster-.*-backup.*"} > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "vCluster backup job failed"
+          description: "Backup job {{ $labels.job_name }} has failed"
+      
+      - alert: BackupNotRunning
+        expr: time() - kube_job_status_completion_time{job_name=~"vcluster-.*-backup.*"} > 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "vCluster backup has not run in 24 hours"
+          description: "No successful backup for more than 24 hours"
+```
+
+## Troubleshooting
+
+<Accordion title="Restore Fails with Namespace Conflicts">
+  **Error:** Resources already exist in the virtual cluster.
+  
+  **Solutions:**
+  
+  1. **Option A:** Delete existing resources first:
+     ```bash
+     vcluster connect my-vcluster --namespace production
+     kubectl delete all --all --all-namespaces
+     vcluster disconnect
+     
+     # Then restore
+     vcluster restore my-vcluster oci://ghcr.io/my-org/backups:backup-tag
+     ```
+  
+  2. **Option B:** Restore to a new virtual cluster:
+     ```bash
+     vcluster create my-vcluster-restored --namespace production-restored
+     vcluster restore my-vcluster-restored \
+       oci://ghcr.io/my-org/backups:backup-tag \
+       --namespace production-restored
+     ```
+</Accordion>
+
+<Accordion title="Backup Storage Quota Exceeded">
+  **Problem:** Cannot create new backups due to storage limits.
+  
+  **Solutions:**
+  
+  1. Clean up old backups:
+     ```bash
+     # List backups by size
+     docker images ghcr.io/my-org/backups --format "table {{.Repository}}:{{.Tag}}\t{{.Size}}"
+     ```
+  
+  2. Implement retention policy (see above)
+  
+  3. Use backup compression (enabled by default)
+  
+  4. Consider tiered storage (frequent backups on fast storage, archives on cheaper storage)
+</Accordion>
+
+<Accordion title="Partial Restore Needed">
+  **Problem:** Only specific resources need to be restored.
+  
+  **Solution:**
+  
+  1. Restore to temporary cluster:
+     ```bash
+     vcluster create temp-restore --namespace temp
+     vcluster restore temp-restore oci://ghcr.io/my-org/backups:backup-tag
+     ```
+  
+  2. Extract specific resources:
+     ```bash
+     vcluster connect temp-restore --namespace temp
+     kubectl get deployment,service,configmap -n target-namespace -o yaml > resources.yaml
+     ```
+  
+  3. Apply to production:
+     ```bash
+     vcluster connect production-vcluster --namespace production
+     kubectl apply -f resources.yaml
+     ```
+  
+  4. Clean up:
+     ```bash
+     vcluster delete temp-restore --namespace temp
+     ```
+</Accordion>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Test Restores Regularly" icon="flask-vial">
+    Schedule quarterly disaster recovery drills to verify backup integrity and team readiness.
+  </Card>
+  
+  <Card title="Multiple Storage Locations" icon="database">
+    Store backups in multiple locations and regions to protect against regional failures.
+  </Card>
+  
+  <Card title="Document Procedures" icon="book-open">
+    Maintain runbooks for common recovery scenarios with step-by-step instructions.
+  </Card>
+  
+  <Card title="Automate Everything" icon="robot">
+    Use CronJobs and operators to automate backup creation, rotation, and verification.
+  </Card>
+  
+  <Card title="Monitor Backup Health" icon="heartbeat">
+    Set up alerts for backup failures and monitor storage capacity.
+  </Card>
+  
+  <Card title="Secure Backup Data" icon="shield-halved">
+    Encrypt backups, use IAM roles, and restrict access with RBAC.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Upgrading" icon="arrow-up" href="/operations/upgrading">
+    Learn safe upgrade procedures using backups
+  </Card>
+  
+  <Card title="Monitoring" icon="chart-line" href="/operations/monitoring">
+    Monitor backup operations and virtual cluster health
+  </Card>
+</CardGroup>

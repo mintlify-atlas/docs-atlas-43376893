@@ -1,0 +1,548 @@
+---
+title: "Upgrading Virtual Clusters"
+description: "Safely upgrade your virtual clusters to new versions"
+---
+
+## Overview
+
+Upgrading vCluster involves updating the control plane components, syncing mechanisms, and potentially the virtual Kubernetes version. This guide covers safe upgrade procedures and best practices.
+
+## Upgrade Types
+
+<CardGroup cols={3}>
+  <Card title="vCluster Version" icon="box">
+    Update vCluster control plane and syncing components
+  </Card>
+  
+  <Card title="Kubernetes Version" icon="dharmachakra">
+    Upgrade the virtual Kubernetes API server version
+  </Card>
+  
+  <Card title="Configuration Changes" icon="gear">
+    Update vCluster configuration and features
+  </Card>
+</CardGroup>
+
+## Upgrading vCluster CLI
+
+Before upgrading virtual clusters, update your CLI to the latest version:
+
+```bash
+vcluster upgrade
+```
+
+### Upgrade to Specific Version
+
+```bash
+vcluster upgrade --version v0.20.0
+```
+
+### Verify CLI Version
+
+```bash
+vcluster --version
+```
+
+## Upgrading a Virtual Cluster
+
+### Pre-Upgrade Checklist
+
+<Steps>
+  <Step title="Review Release Notes">
+    Check the [vCluster release notes](https://github.com/loft-sh/vcluster/releases) for:
+    - Breaking changes
+    - New features
+    - Known issues
+    - Migration guides
+  </Step>
+  
+  <Step title="Create Backup">
+    Always create a snapshot before upgrading:
+    
+    ```bash
+    vcluster snapshot create my-vcluster \
+      oci://ghcr.io/my-org/backups:my-vcluster-pre-upgrade-$(date +%Y%m%d) \
+      --namespace production
+    ```
+  </Step>
+  
+  <Step title="Check Current Version">
+    Document the current version:
+    
+    ```bash
+    helm list -n production
+    vcluster describe my-vcluster --namespace production
+    ```
+  </Step>
+  
+  <Step title="Plan Maintenance Window">
+    - Schedule during low-traffic periods
+    - Notify stakeholders
+    - Prepare rollback plan
+    - Have monitoring ready
+  </Step>
+</Steps>
+
+### Standard Upgrade Procedure
+
+<Tabs>
+  <Tab title="Helm Driver">
+    ```bash
+    # Update Helm repository
+    helm repo update
+    
+    # Upgrade vCluster
+    helm upgrade my-vcluster vcluster \
+      --repo https://charts.loft.sh \
+      --namespace production \
+      --reuse-values
+    ```
+    
+    Or upgrade to a specific version:
+    
+    ```bash
+    helm upgrade my-vcluster vcluster \
+      --repo https://charts.loft.sh \
+      --version 0.20.0 \
+      --namespace production \
+      --reuse-values
+    ```
+  </Tab>
+  
+  <Tab title="Platform Driver">
+    Upgrades are managed through the vCluster Platform UI or API:
+    
+    ```bash
+    # List available versions
+    vcluster platform list versions
+    
+    # Upgrade via CLI
+    vcluster platform upgrade my-vcluster \
+      --version 0.20.0 \
+      --project my-project
+    ```
+  </Tab>
+  
+  <Tab title="Docker Driver">
+    ```bash
+    # Stop current cluster
+    vcluster delete my-vcluster --driver docker
+    
+    # Create with new version
+    vcluster create my-vcluster \
+      --driver docker \
+      --chart-version 0.20.0
+    
+    # Restore from backup if needed
+    vcluster restore my-vcluster <backup-location>
+    ```
+  </Tab>
+</Tabs>
+
+### Upgrade with Configuration Changes
+
+If you need to modify configuration during upgrade:
+
+```bash
+# Export current configuration
+vcluster describe my-vcluster --config-only > vcluster.yaml
+
+# Edit vcluster.yaml with desired changes
+vim vcluster.yaml
+
+# Upgrade with new configuration
+helm upgrade my-vcluster vcluster \
+  --repo https://charts.loft.sh \
+  --namespace production \
+  --values vcluster.yaml
+```
+
+## Post-Upgrade Verification
+
+<Steps>
+  <Step title="Check Pod Status">
+    Verify all pods are running:
+    
+    ```bash
+    kubectl get pods -n production -l release=my-vcluster
+    ```
+    
+    Wait for all pods to reach `Running` state:
+    
+    ```bash
+    kubectl wait --for=condition=ready pod \
+      -l app=vcluster,release=my-vcluster \
+      -n production \
+      --timeout=300s
+    ```
+  </Step>
+  
+  <Step title="Verify API Server">
+    Test connectivity to the virtual cluster:
+    
+    ```bash
+    vcluster connect my-vcluster --namespace production
+    kubectl get nodes
+    kubectl get pods --all-namespaces
+    ```
+  </Step>
+  
+  <Step title="Check Syncing">
+    Verify resources are syncing correctly:
+    
+    ```bash
+    # From virtual cluster context
+    kubectl create deployment test-nginx --image=nginx
+    
+    # Check if it appears in host namespace
+    vcluster disconnect
+    kubectl get pods -n production | grep nginx
+    
+    # Clean up
+    vcluster connect my-vcluster --namespace production
+    kubectl delete deployment test-nginx
+    ```
+  </Step>
+  
+  <Step title="Review Logs">
+    Check for any errors or warnings:
+    
+    ```bash
+    kubectl logs -n production -l app=vcluster,release=my-vcluster --tail=100
+    ```
+  </Step>
+  
+  <Step title="Run Smoke Tests">
+    Execute your application-specific health checks and tests.
+  </Step>
+</Steps>
+
+## Upgrading Kubernetes Version
+
+To upgrade the virtual Kubernetes version:
+
+```yaml
+# vcluster.yaml
+controlPlane:
+  distro:
+    k8s:
+      enabled: true
+      version: "1.29.0"  # Specify desired version
+```
+
+Apply the upgrade:
+
+```bash
+helm upgrade my-vcluster vcluster \
+  --repo https://charts.loft.sh \
+  --namespace production \
+  --values vcluster.yaml
+```
+
+<Warning>
+  Kubernetes version upgrades should be done incrementally (e.g., 1.27 → 1.28 → 1.29). Skipping versions may cause compatibility issues.
+</Warning>
+
+## Rollback Procedures
+
+If the upgrade fails or causes issues:
+
+### Helm Rollback
+
+```bash
+# View upgrade history
+helm history my-vcluster -n production
+
+# Rollback to previous version
+helm rollback my-vcluster -n production
+
+# Or rollback to specific revision
+helm rollback my-vcluster 2 -n production
+```
+
+### Snapshot Restore Rollback
+
+For major issues, restore from pre-upgrade snapshot:
+
+```bash
+# Restore from backup
+vcluster restore my-vcluster \
+  oci://ghcr.io/my-org/backups:my-vcluster-pre-upgrade-20240115 \
+  --namespace production
+```
+
+## Upgrade Strategies
+
+### Blue-Green Upgrade
+
+Minimize downtime with blue-green deployment:
+
+<Steps>
+  <Step title="Create Green Cluster">
+    ```bash
+    vcluster create my-vcluster-green --namespace production-green
+    ```
+  </Step>
+  
+  <Step title="Restore Data">
+    ```bash
+    vcluster restore my-vcluster-green \
+      oci://ghcr.io/my-org/backups:my-vcluster-latest \
+      --namespace production-green
+    ```
+  </Step>
+  
+  <Step title="Test Green Cluster">
+    ```bash
+    vcluster connect my-vcluster-green --namespace production-green
+    # Run tests
+    ```
+  </Step>
+  
+  <Step title="Switch Traffic">
+    Update ingress or service endpoints to point to green cluster.
+  </Step>
+  
+  <Step title="Monitor">
+    Watch for issues. Keep blue cluster running for quick rollback.
+  </Step>
+  
+  <Step title="Decommission Blue">
+    After verification period:
+    ```bash
+    vcluster delete my-vcluster --namespace production
+    ```
+  </Step>
+</Steps>
+
+### Canary Upgrade
+
+Gradually migrate workloads:
+
+<Steps>
+  <Step title="Create Canary Cluster">
+    Deploy upgraded version alongside production:
+    ```bash
+    vcluster create my-vcluster-canary \
+      --namespace production-canary \
+      --values vcluster-v0.20.yaml
+    ```
+  </Step>
+  
+  <Step title="Route Small Percentage">
+    Configure load balancer to send 10% of traffic to canary.
+  </Step>
+  
+  <Step title="Monitor Metrics">
+    Compare performance and error rates between versions.
+  </Step>
+  
+  <Step title="Gradually Increase">
+    Incrementally increase traffic to canary: 10% → 25% → 50% → 100%
+  </Step>
+  
+  <Step title="Complete Migration">
+    Once validated, make canary the primary cluster.
+  </Step>
+</Steps>
+
+## Automated Upgrades
+
+### Renovate Bot Configuration
+
+Automate Helm chart updates with Renovate:
+
+```json
+{
+  "extends": ["config:base"],
+  "helm-values": {
+    "fileMatch": [".*\\.ya?ml$"]
+  },
+  "packageRules": [
+    {
+      "matchDatasources": ["helm"],
+      "matchPackageNames": ["vcluster"],
+      "groupName": "vCluster",
+      "automerge": false,
+      "schedule": ["before 6am on monday"]
+    }
+  ]
+}
+```
+
+### GitOps-Based Upgrades
+
+Using ArgoCD or Flux:
+
+```yaml
+# argocd-application.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-vcluster
+  namespace: argocd
+spec:
+  source:
+    repoURL: https://charts.loft.sh
+    targetRevision: 0.20.0  # Update this to trigger upgrade
+    chart: vcluster
+    helm:
+      values: |
+        # Your vcluster values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: production
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+```
+
+## Troubleshooting Upgrades
+
+<AccordionGroup>
+  <Accordion title="Pods Stuck in Pending State">
+    **Symptoms:** Virtual cluster pods won't start after upgrade.
+    
+    **Diagnosis:**
+    ```bash
+    kubectl describe pod -n production -l release=my-vcluster
+    kubectl get events -n production --sort-by='.lastTimestamp'
+    ```
+    
+    **Common Causes:**
+    - Insufficient resources
+    - Image pull errors
+    - PVC mount issues
+    
+    **Solutions:**
+    1. Check resource availability:
+       ```bash
+       kubectl top nodes
+       kubectl describe node <node-name>
+       ```
+    
+    2. Verify image access:
+       ```bash
+       kubectl get pods -n production -l release=my-vcluster -o jsonpath='{.items[*].spec.containers[*].image}'
+       ```
+    
+    3. Check PVC status:
+       ```bash
+       kubectl get pvc -n production
+       ```
+  </Accordion>
+  
+  <Accordion title="API Server Not Responding">
+    **Symptoms:** Cannot connect to virtual cluster after upgrade.
+    
+    **Diagnosis:**
+    ```bash
+    kubectl logs -n production -l app=vcluster,release=my-vcluster
+    kubectl get svc -n production
+    ```
+    
+    **Solutions:**
+    1. Restart the virtual cluster:
+       ```bash
+       kubectl rollout restart statefulset -n production my-vcluster
+       ```
+    
+    2. Check service endpoints:
+       ```bash
+       kubectl get endpoints -n production
+       ```
+    
+    3. Verify network policies:
+       ```bash
+       kubectl get networkpolicy -n production
+       ```
+  </Accordion>
+  
+  <Accordion title="Syncing Stopped Working">
+    **Symptoms:** Resources not syncing between virtual and host cluster.
+    
+    **Diagnosis:**
+    ```bash
+    # Check syncer logs
+    kubectl logs -n production -l app=vcluster,release=my-vcluster -c syncer
+    
+    # Check RBAC
+    kubectl auth can-i --list --as=system:serviceaccount:production:vc-my-vcluster
+    ```
+    
+    **Solutions:**
+    1. Verify sync configuration in vcluster.yaml
+    2. Check service account permissions
+    3. Review network connectivity between pods
+    4. Restart syncer:
+       ```bash
+       kubectl delete pod -n production -l app=vcluster,release=my-vcluster
+       ```
+  </Accordion>
+  
+  <Accordion title="CRD Version Conflicts">
+    **Error:** CRD versions incompatible after upgrade.
+    
+    **Solution:**
+    
+    1. Identify conflicting CRDs:
+       ```bash
+       kubectl get crd
+       ```
+    
+    2. Update CRDs manually if needed:
+       ```bash
+       kubectl apply -f https://github.com/loft-sh/vcluster/releases/download/v0.20.0/crds.yaml
+       ```
+    
+    3. Or use Helm's CRD upgrade:
+       ```bash
+       helm upgrade my-vcluster vcluster \
+         --repo https://charts.loft.sh \
+         --namespace production \
+         --reuse-values \
+         --force
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Test in Staging First" icon="flask">
+    Always test upgrades in non-production environments before applying to production.
+  </Card>
+  
+  <Card title="Incremental Updates" icon="stairs">
+    Upgrade one minor version at a time to minimize compatibility issues.
+  </Card>
+  
+  <Card title="Backup Before Upgrade" icon="floppy-disk">
+    Create snapshots before every upgrade. Automate this step.
+  </Card>
+  
+  <Card title="Monitor During Upgrade" icon="chart-line">
+    Watch metrics and logs during and after the upgrade process.
+  </Card>
+  
+  <Card title="Document Everything" icon="book">
+    Keep records of upgrade procedures, issues encountered, and resolutions.
+  </Card>
+  
+  <Card title="Plan Rollback" icon="rotate-left">
+    Always have a tested rollback plan before starting an upgrade.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Monitoring" icon="chart-line" href="/operations/monitoring">
+    Set up monitoring to track upgrade success and cluster health
+  </Card>
+  
+  <Card title="Troubleshooting" icon="wrench" href="/operations/troubleshooting">
+    Learn how to diagnose and fix common issues
+  </Card>
+</CardGroup>

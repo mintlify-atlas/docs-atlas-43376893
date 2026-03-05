@@ -1,0 +1,952 @@
+---
+title: Standalone Mode
+description: Run vCluster without a host cluster on bare metal, VMs, or edge devices
+---
+
+Standalone mode allows vCluster to run without any host Kubernetes cluster. The vCluster control plane runs directly on a machine (bare metal, VM, or container), and nodes join it directly. This provides the ultimate isolation and is perfect for bare metal, edge computing, and scenarios where you don't want or need a host cluster.
+
+<Info>
+  **Introduced in v0.29**: Standalone mode is a Pro feature that requires a vCluster Pro license.
+</Info>
+
+## How It Works
+
+In standalone mode, vCluster becomes a complete, first-class Kubernetes cluster:
+
+```
+┌────────────────────────────────────────────────────────────┐
+│         Control Plane Machine (VM / Bare Metal)         │
+│                                                             │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │ vCluster Standalone Control Plane               │  │
+│  │  - API Server (binds to machine IP)             │  │
+│  │  - Controller Manager                            │  │
+│  │  - Scheduler                                     │  │
+│  │  - Data Store (embedded etcd)                    │  │
+│  │  - Konnectivity Server                           │  │
+│  │  - Cloud Controller Manager                      │  │
+│  └───────────────────────────────────────────────────┘  │
+│                                                             │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │ Optional: Control Plane as Node                │  │
+│  │  - Kubelet                                       │  │
+│  │  - Container Runtime (containerd)                │  │
+│  │  - CNI, CSI                                      │  │
+│  └───────────────────────────────────────────────────┘  │
+│                                                             │
+└────────────────────────────────────────────────────────────┘
+                           │
+                           │ Standard Kubernetes Join
+                           │ (kubeadm join style)
+                           │
+       ┌────────────────┼──────────────────────┐
+       │                │                       │
+       ▼                ▼                       ▼
+┌────────────────────────────────────────────────────────────┐
+│          Worker Nodes (Bare Metal / VM / Edge)         │
+│                                                           │
+│  ┌────────────────────────────────────────────────┐ │
+│  │ Node 1                                       │ │
+│  │  - Kubelet                                    │ │
+│  │  - Konnectivity Agent                         │ │
+│  │  - Container Runtime (containerd)             │ │
+│  │  - CNI Plugin                                 │ │
+│  │  - Kube-proxy                                 │ │
+│  └────────────────────────────────────────────────┘ │
+│                                                           │
+│  ┌────────────────────────────────────────────────┐ │
+│  │ Node 2, Node 3, ...                          │ │
+│  └────────────────────────────────────────────────┘ │
+│                                                           │
+└────────────────────────────────────────────────────────────┘
+```
+
+### Key Characteristics
+
+<Check>**No Host Cluster**: Runs directly on machines without Kubernetes</Check>
+<Check>**Complete Independence**: Own CNI, CSI, networking, everything</Check>
+<Check>**Native Kubernetes**: Works exactly like a standard Kubernetes cluster</Check>
+<Check>**Control Plane as Node**: Can run workloads on the control plane machine</Check>
+<Check>**Maximum Isolation**: Highest level of isolation possible</Check>
+<Check>**Bare Metal Ready**: Perfect for running directly on hardware</Check>
+
+## Setup
+
+### Prerequisites
+
+- **Machine for control plane**: Linux VM or bare metal server
+- **Network connectivity**: Control plane must be reachable by worker nodes
+- **Storage**: At least 20GB for control plane data
+- **Requirements**: 2+ CPU cores, 4GB+ RAM for control plane
+
+### Create Standalone vCluster
+
+<Steps>
+  <Step title="Install vCluster Binary">
+    On the control plane machine:
+
+    ```bash
+    # Download vCluster
+    curl -L -o vcluster "https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-linux-amd64"
+    chmod +x vcluster
+    sudo mv vcluster /usr/local/bin/
+    ```
+  </Step>
+
+  <Step title="Create Configuration File">
+    ```yaml standalone.yaml
+    controlPlane:
+      standalone:
+        enabled: true
+        dataDir: "/var/lib/vcluster"
+        joinNode:
+          enabled: true  # Control plane also acts as node
+          containerd:
+            enabled: true
+    
+    privateNodes:
+      enabled: true
+    
+    networking:
+      podCIDR: "10.244.0.0/16"
+    
+    deploy:
+      cni:
+        flannel:
+          enabled: true
+      localPathProvisioner:
+        enabled: true
+    ```
+  </Step>
+
+  <Step title="Start the Control Plane">
+    ```bash
+    sudo vcluster start \
+      --config standalone.yaml \
+      --bind-address 0.0.0.0
+    ```
+
+    Or run as a systemd service:
+
+    ```ini /etc/systemd/system/vcluster.service
+    [Unit]
+    Description=vCluster Standalone Control Plane
+    After=network.target
+
+    [Service]
+    Type=simple
+    User=root
+    ExecStart=/usr/local/bin/vcluster start \
+      --config /etc/vcluster/standalone.yaml \
+      --bind-address 0.0.0.0
+    Restart=always
+    RestartSec=10
+
+    [Install]
+    WantedBy=multi-user.target
+    ```
+
+    ```bash
+    sudo systemctl daemon-reload
+    sudo systemctl enable vcluster
+    sudo systemctl start vcluster
+    ```
+  </Step>
+
+  <Step title="Get Kubeconfig">
+    ```bash
+    # Kubeconfig is created at:
+    sudo cat /var/lib/vcluster/admin.kubeconfig
+
+    # Or use vCluster CLI
+    vcluster connect standalone --server https://<control-plane-ip>:6443
+    ```
+  </Step>
+
+  <Step title="Verify Control Plane">
+    ```bash
+    export KUBECONFIG=/var/lib/vcluster/admin.kubeconfig
+    kubectl get nodes
+    # NAME             STATUS   ROLES           AGE   VERSION
+    # control-plane-1  Ready    control-plane   2m    v1.28.0
+    ```
+  </Step>
+
+  <Step title="Join Worker Nodes (Optional)">
+    On each worker machine:
+
+    ```bash
+    # Install vCluster
+    curl -L -o vcluster https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-linux-amd64
+    chmod +x vcluster && sudo mv vcluster /usr/local/bin/
+
+    # Join the cluster
+    sudo vcluster node join \
+      --api-server https://<control-plane-ip>:6443 \
+      --token <join-token> \
+      --ca-cert-hash sha256:<hash>
+    ```
+  </Step>
+</Steps>
+
+## Configuration
+
+### Basic Standalone Configuration
+
+```yaml standalone-minimal.yaml
+controlPlane:
+  standalone:
+    enabled: true
+    joinNode:
+      enabled: true  # Control plane is also a worker node
+
+privateNodes:
+  enabled: true
+
+networking:
+  podCIDR: "10.244.0.0/16"
+
+deploy:
+  cni:
+    flannel:
+      enabled: true
+```
+
+### Advanced Configuration
+
+```yaml standalone-advanced.yaml
+controlPlane:
+  standalone:
+    enabled: true
+    dataDir: "/var/lib/vcluster"
+    joinNode:
+      enabled: true
+      containerd:
+        enabled: true
+  
+  # Use embedded etcd for HA
+  backingStore:
+    etcd:
+      embedded:
+        enabled: true
+  
+  # High availability setup
+  statefulSet:
+    highAvailability:
+      replicas: 3  # 3 control plane nodes
+      leaseDuration: 60
+      renewDeadline: 40
+      retryPeriod: 15
+
+privateNodes:
+  enabled: true
+  kubelet:
+    config:
+      maxPods: 200
+      imageGCHighThresholdPercent: 85
+  joinNode:
+    containerd:
+      enabled: true
+
+networking:
+  podCIDR: "10.244.0.0/16"
+  services:
+    cidr: "10.96.0.0/12"
+
+deploy:
+  cni:
+    flannel:
+      enabled: true
+  localPathProvisioner:
+    enabled: true
+  kubeProxy:
+    enabled: true
+    config:
+      mode: "ipvs"  # Better performance
+  metallb:
+    enabled: true
+    ipAddressPool:
+      addresses:
+        - 192.168.1.100-192.168.1.200
+```
+
+### Control Plane Without Node
+
+If you want a dedicated control plane that doesn't run workloads:
+
+```yaml
+controlPlane:
+  standalone:
+    enabled: true
+    joinNode:
+      enabled: false  # Control plane only, no workloads
+
+privateNodes:
+  enabled: true
+```
+
+Then join separate worker nodes.
+
+## Use Cases
+
+### Edge Computing
+
+**Perfect for:** IoT, retail locations, remote sites, manufacturing plants
+
+```yaml edge-cluster.yaml
+controlPlane:
+  standalone:
+    enabled: true
+    dataDir: "/var/lib/vcluster"
+    joinNode:
+      enabled: true
+
+privateNodes:
+  enabled: true
+  kubelet:
+    config:
+      maxPods: 50  # Limited resources
+
+networking:
+  podCIDR: "10.0.0.0/16"
+
+deploy:
+  cni:
+    flannel:
+      enabled: true
+  localPathProvisioner:
+    enabled: true
+
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.cpu: 4
+      requests.memory: 8Gi
+```
+
+**Deployment:**
+```bash
+# On edge device (e.g., Raspberry Pi cluster, NUC, edge server)
+sudo vcluster start --config edge-cluster.yaml
+```
+
+**Benefits:**
+- No cloud dependency
+- Low latency (compute at the edge)
+- Offline operation
+- Cost-effective
+
+### Bare Metal Kubernetes
+
+**Perfect for:** On-premises data centers, high-performance computing, cost optimization
+
+```yaml bare-metal.yaml
+controlPlane:
+  standalone:
+    enabled: true
+    joinNode:
+      enabled: false  # Dedicated control plane
+  
+  backingStore:
+    etcd:
+      embedded:
+        enabled: true
+  
+  statefulSet:
+    highAvailability:
+      replicas: 3  # HA control plane
+
+privateNodes:
+  enabled: true
+  kubelet:
+    config:
+      maxPods: 200
+
+networking:
+  podCIDR: "10.244.0.0/16"
+
+deploy:
+  cni:
+    flannel:
+      enabled: true
+  kubeProxy:
+    enabled: true
+    config:
+      mode: "ipvs"
+  metallb:
+    enabled: true
+    ipAddressPool:
+      addresses:
+        - 10.1.0.100-10.1.0.200
+```
+
+**Benefits:**
+- Maximum performance (no virtualization overhead)
+- Complete control over hardware
+- Lower costs (no cloud markup)
+- Predictable performance
+
+### Development and Testing
+
+**Perfect for:** Local development, testing, CI/CD on physical hardware
+
+```yaml dev-cluster.yaml
+controlPlane:
+  standalone:
+    enabled: true
+    joinNode:
+      enabled: true  # All-in-one
+
+privateNodes:
+  enabled: true
+
+networking:
+  podCIDR: "10.244.0.0/16"
+
+deploy:
+  cni:
+    flannel:
+      enabled: true
+  localPathProvisioner:
+    enabled: true
+```
+
+**Single-command setup:**
+```bash
+sudo vcluster start --config dev-cluster.yaml
+```
+
+### AI/ML Workloads on Bare Metal
+
+**Perfect for:** GPU clusters, training farms, inference servers
+
+```yaml gpu-cluster.yaml
+controlPlane:
+  standalone:
+    enabled: true
+    joinNode:
+      enabled: false
+
+privateNodes:
+  enabled: true
+  kubelet:
+    config:
+      maxPods: 100
+
+networking:
+  podCIDR: "10.244.0.0/16"
+
+deploy:
+  cni:
+    flannel:
+      enabled: true
+  localPathProvisioner:
+    enabled: true
+```
+
+**Worker nodes with GPUs:**
+```bash
+# On GPU server
+sudo vcluster node join \
+  --api-server https://control-plane:6443 \
+  --token <token>
+
+# Install NVIDIA GPU operator
+kubectl apply -f https://raw.githubusercontent.com/NVIDIA/gpu-operator/master/deployments/gpu-operator.yaml
+```
+
+## Networking
+
+### CNI Options
+
+Standalone mode supports any CNI plugin:
+
+<Tabs>
+  <Tab title="Flannel (Default)">
+    ```yaml
+    deploy:
+      cni:
+        flannel:
+          enabled: true
+    
+    networking:
+      podCIDR: "10.244.0.0/16"
+    ```
+
+    Simple, reliable, works everywhere.
+  </Tab>
+
+  <Tab title="Calico">
+    ```yaml
+    deploy:
+      cni:
+        flannel:
+          enabled: false
+    
+    networking:
+      podCIDR: "192.168.0.0/16"
+    ```
+
+    Install Calico:
+    ```bash
+    kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+    ```
+
+    Network policies, BGP routing.
+  </Tab>
+
+  <Tab title="Cilium">
+    ```yaml
+    deploy:
+      cni:
+        flannel:
+          enabled: false
+    ```
+
+    Install Cilium:
+    ```bash
+    cilium install
+    ```
+
+    eBPF-based, service mesh features.
+  </Tab>
+</Tabs>
+
+### Load Balancer (MetalLB)
+
+For bare metal LoadBalancer services:
+
+```yaml
+deploy:
+  metallb:
+    enabled: true
+    ipAddressPool:
+      addresses:
+        - 192.168.1.100-192.168.1.150  # Available IP range
+      l2Advertisement: true
+```
+
+**Usage:**
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app
+spec:
+  type: LoadBalancer  # Gets IP from MetalLB pool
+  ports:
+    - port: 80
+  selector:
+    app: my-app
+```
+
+### Ingress
+
+Install any ingress controller:
+
+```bash
+# NGINX Ingress
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/baremetal/deploy.yaml
+
+# Traefik
+helm install traefik traefik/traefik
+```
+
+## Storage
+
+### Local Path Provisioner (Default)
+
+```yaml
+deploy:
+  localPathProvisioner:
+    enabled: true
+```
+
+Provides dynamic local storage on each node.
+
+### NFS Storage
+
+For shared storage across nodes:
+
+```bash
+# Install NFS CSI driver
+helm install csi-driver-nfs \
+  csi-driver-nfs/csi-driver-nfs \
+  --namespace kube-system
+
+# Create storage class
+kubectl apply -f - <<EOF
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: nfs-server.example.com
+  share: /shared
+reclaimPolicy: Retain
+EOF
+```
+
+### Longhorn (Distributed Storage)
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/master/deploy/longhorn.yaml
+```
+
+Provides replicated block storage across nodes.
+
+## High Availability
+
+Run multiple control plane nodes for HA:
+
+### 3-Node Control Plane
+
+<Steps>
+  <Step title="Create Load Balancer">
+    Set up HAProxy or similar to load balance across control plane nodes:
+
+    ```haproxy /etc/haproxy/haproxy.cfg
+    frontend kubernetes
+        bind *:6443
+        mode tcp
+        option tcplog
+        default_backend kubernetes-masters
+
+    backend kubernetes-masters
+        mode tcp
+        balance roundrobin
+        server master1 10.0.0.1:6443 check
+        server master2 10.0.0.2:6443 check
+        server master3 10.0.0.3:6443 check
+    ```
+  </Step>
+
+  <Step title="Initialize First Control Plane Node">
+    ```bash
+    sudo vcluster start \
+      --config standalone-ha.yaml \
+      --advertise-address 10.0.0.1
+    ```
+  </Step>
+
+  <Step title="Join Additional Control Plane Nodes">
+    ```bash
+    # On control-plane-2 and control-plane-3
+    sudo vcluster control-plane join \
+      --api-server https://10.0.0.1:6443 \
+      --token <control-plane-token> \
+      --advertise-address <node-ip>
+    ```
+  </Step>
+
+  <Step title="Verify HA Setup">
+    ```bash
+    kubectl get nodes
+    # NAME              STATUS   ROLES           AGE   VERSION
+    # control-plane-1   Ready    control-plane   5m    v1.28.0
+    # control-plane-2   Ready    control-plane   3m    v1.28.0
+    # control-plane-3   Ready    control-plane   2m    v1.28.0
+    ```
+  </Step>
+</Steps>
+
+## Performance Characteristics
+
+### Resource Requirements
+
+**Control Plane:**
+- **Minimum**: 2 CPU, 4GB RAM, 20GB disk
+- **Recommended**: 4 CPU, 8GB RAM, 50GB SSD
+- **High Load**: 8+ CPU, 16GB+ RAM, 100GB+ SSD
+
+**Worker Node:**
+- **Minimum**: 1 CPU, 2GB RAM, 10GB disk
+- **Recommended**: 2+ CPU, 4GB+ RAM, 20GB+ disk
+
+### Performance
+
+| Metric | Standalone Mode |
+|--------|----------------:|
+| Startup Time | 60-120 seconds |
+| API Latency | < 10ms (local network) |
+| Pod Scheduling | Near-native Kubernetes |
+| Network Performance | CNI-dependent (near-native) |
+| Storage Performance | Native (no virtualization) |
+
+### Scaling Limits
+
+| Metric | Single Control Plane | HA (3 nodes) |
+|--------|-----------------------:|--------------:|
+| Worker Nodes | 1-100 | 1-1000+ |
+| Pods | 1000s | 10,000+ |
+| Services | 100s | 1000s |
+| Namespaces | 100s | 1000s |
+
+## Pros and Cons
+
+### Advantages
+
+<Check>**No Host Cluster**: Zero dependency on Kubernetes</Check>
+<Check>**Maximum Performance**: No virtualization overhead</Check>
+<Check>**Complete Control**: Full control over all components</Check>
+<Check>**Cost Effective**: No cloud or host cluster costs</Check>
+<Check>**Maximum Isolation**: Truly independent cluster</Check>
+<Check>**Edge Ready**: Perfect for edge and remote deployments</Check>
+<Check>**Standard Kubernetes**: Works exactly like native K8s</Check>
+
+### Limitations
+
+<Warning>**Infrastructure Required**: Must provide machines/VMs</Warning>
+<Warning>**Manual Management**: No automatic node provisioning</Warning>
+<Warning>**Operational Complexity**: Full cluster operations responsibility</Warning>
+<Warning>**No Multi-Tenancy**: One cluster per deployment</Warning>
+<Warning>**Pro License**: Requires vCluster Pro</Warning>
+
+### Comparison
+
+| Aspect | Private Nodes | Standalone |
+|--------|:-------------:|:----------:|
+| Host Cluster Required | Yes | No |
+| Setup Complexity | Medium | High |
+| Operational Overhead | Lower | Higher |
+| Independence | High | Highest |
+| Edge/Bare Metal | Good | Best |
+| Multi-Tenancy | Yes (many vClusters) | No (one cluster) |
+
+## Troubleshooting
+
+### Control Plane Won't Start
+
+```bash
+# Check logs
+journalctl -u vcluster -f
+
+# Common issues:
+# 1. Port 6443 already in use
+# 2. Insufficient permissions (need root)
+# 3. Invalid configuration
+
+# Verify ports
+sudo netstat -tulpn | grep 6443
+
+# Check configuration
+vcluster validate --config standalone.yaml
+```
+
+### Nodes Won't Join
+
+```bash
+# Verify control plane is reachable
+curl -k https://<control-plane-ip>:6443
+
+# Check firewall
+sudo iptables -L -n | grep 6443
+
+# Regenerate join token
+vcluster node join --print
+```
+
+### Networking Issues
+
+```bash
+# Check CNI pods
+kubectl get pods -n kube-system -l k8s-app=kube-flannel
+
+# Verify pod CIDR
+kubectl get nodes -o jsonpath='{.items[*].spec.podCIDR}'
+
+# Test pod networking
+kubectl run test-1 --image=nginx
+kubectl run test-2 --image=nginx
+kubectl exec test-1 -- ping <test-2-ip>
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use systemd for Control Plane" icon="gear">
+    Run control plane as a systemd service for automatic restart:
+
+    ```bash
+    sudo systemctl enable vcluster
+    sudo systemctl start vcluster
+    ```
+  </Accordion>
+
+  <Accordion title="Implement High Availability" icon="shield">
+    For production, always run 3+ control plane nodes:
+
+    ```yaml
+    controlPlane:
+      statefulSet:
+        highAvailability:
+          replicas: 3
+    ```
+  </Accordion>
+
+  <Accordion title="Backup etcd Regularly" icon="floppy-disk">
+    ```bash
+    # Backup script
+    #!/bin/bash
+    BACKUP_DIR="/backup/vcluster-etcd"
+    DATE=$(date +%Y%m%d-%H%M%S)
+    
+    vcluster snapshot create \
+      --name "backup-${DATE}" \
+      --destination "${BACKUP_DIR}"
+    
+    # Retention: keep 7 days
+    find "${BACKUP_DIR}" -mtime +7 -delete
+    ```
+  </Accordion>
+
+  <Accordion title="Monitor Control Plane Health" icon="heart-pulse">
+    ```bash
+    # Health check script
+    #!/bin/bash
+    
+    kubectl get --raw=/healthz
+    kubectl get nodes
+    kubectl get pods -A | grep -v Running
+    ```
+  </Accordion>
+
+  <Accordion title="Use Dedicated Storage" icon="hard-drive">
+    Don't use the same disk for OS and etcd:
+
+    ```yaml
+    controlPlane:
+      standalone:
+        dataDir: "/mnt/vcluster-data"  # Separate mount
+    ```
+  </Accordion>
+
+  <Accordion title="Secure the Control Plane" icon="lock">
+    ```bash
+    # Firewall rules
+    sudo ufw allow 6443/tcp  # API server
+    sudo ufw enable
+    
+    # Use certificates
+    # Use RBAC
+    # Audit logging
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Automation
+
+### Ansible Playbook
+
+```yaml vcluster-standalone.yml
+---
+- name: Deploy vCluster Standalone
+  hosts: control_plane
+  become: yes
+  tasks:
+    - name: Download vCluster
+      get_url:
+        url: https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-linux-amd64
+        dest: /usr/local/bin/vcluster
+        mode: '0755'
+    
+    - name: Create config directory
+      file:
+        path: /etc/vcluster
+        state: directory
+    
+    - name: Copy configuration
+      copy:
+        src: standalone.yaml
+        dest: /etc/vcluster/standalone.yaml
+    
+    - name: Install systemd service
+      copy:
+        src: vcluster.service
+        dest: /etc/systemd/system/vcluster.service
+    
+    - name: Start vCluster
+      systemd:
+        name: vcluster
+        state: started
+        enabled: yes
+```
+
+### Terraform
+
+```hcl
+# Provision VMs and deploy standalone vCluster
+resource "aws_instance" "control_plane" {
+  ami           = "ami-xxxxxxxxx"
+  instance_type = "t3.medium"
+  
+  user_data = <<-EOF
+    #!/bin/bash
+    curl -L -o /usr/local/bin/vcluster https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-linux-amd64
+    chmod +x /usr/local/bin/vcluster
+    
+    cat > /etc/vcluster/standalone.yaml <<CONFIG
+    ${file("standalone.yaml")}
+    CONFIG
+    
+    systemctl start vcluster
+  EOF
+  
+  tags = {
+    Name = "vcluster-control-plane"
+  }
+}
+```
+
+## Migration
+
+### From Private Nodes to Standalone
+
+<Steps>
+  <Step title="Setup Standalone Cluster">
+    Deploy new standalone vCluster on dedicated machines.
+  </Step>
+
+  <Step title="Backup Old Cluster">
+    ```bash
+    vcluster snapshot create backup --namespace old-vcluster
+    ```
+  </Step>
+
+  <Step title="Migrate Workloads">
+    ```bash
+    # Export
+    kubectl get all -A -o yaml > workloads.yaml
+    
+    # Import
+    kubectl apply -f workloads.yaml
+    ```
+  </Step>
+
+  <Step title="Update DNS">
+    Point applications to new cluster.
+  </Step>
+
+  <Step title="Decommission Old Cluster">
+    After verification, remove old vCluster.
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Auto Nodes" icon="wand-magic-sparkles" href="/architecture/auto-nodes">
+    Add automatic node provisioning to standalone clusters.
+  </Card>
+  <Card title="Private Nodes" icon="shield" href="/architecture/private-nodes">
+    Compare with private nodes architecture.
+  </Card>
+  <Card title="High Availability" icon="server" href="/vcluster/deploy/control-plane/high-availability">
+    Configure HA for production deployments.
+  </Card>
+  <Card title="Monitoring" icon="chart-line" href="/vcluster/manage/monitoring">
+    Set up monitoring and observability.
+  </Card>
+</CardGroup>

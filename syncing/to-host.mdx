@@ -1,0 +1,432 @@
+---
+title: Syncing To Host
+description: Configure resources to sync from virtual cluster to host cluster
+---
+
+Resources created in the virtual cluster can be synced to the host cluster, allowing workloads to run on the host infrastructure. This is the primary syncing direction for most vCluster deployments.
+
+## How To-Host Syncing Works
+
+When you create a resource in the virtual cluster that has to-host syncing enabled:
+
+1. The syncer detects the new virtual resource
+2. A corresponding host resource is created with a translated name
+3. The syncer continuously keeps the resources in sync
+4. When the virtual resource is deleted, the host resource is also deleted
+
+### Name Translation
+
+Resources synced to the host are renamed to prevent conflicts with other virtual clusters:
+
+```
+Virtual: my-pod (namespace: default)
+Host:    my-vcluster-default-my-pod-x-default-x-my-vcluster
+```
+
+The host resource includes annotations tracking its origin:
+```yaml
+annotations:
+  vcluster.loft.sh/name: my-pod
+  vcluster.loft.sh/namespace: default
+  vcluster.loft.sh/uid: "abc123..."
+```
+
+## Default Synced Resources
+
+These resources sync to the host by default:
+
+### Pods
+
+**Enabled by default** - Essential for running workloads.
+
+```yaml
+sync:
+  toHost:
+    pods:
+      enabled: true
+```
+
+**Additional pod options:**
+
+```yaml
+sync:
+  toHost:
+    pods:
+      enabled: true
+      # Rewrite image references
+      translateImage:
+        "gcr.io/my-repo": "docker.io/my-mirror"
+      
+      # Add tolerations to all synced pods
+      enforceTolerations:
+        - "node.kubernetes.io/special=:NoSchedule"
+      
+      # Set runtime class for all synced pods
+      runtimeClassName: "kata"
+      
+      # Set priority class for all synced pods
+      priorityClassName: "high-priority"
+      
+      # Use secrets for service account tokens instead of annotations
+      useSecretsForSATokens: false
+      
+      # Rewrite /etc/hosts for StatefulSet pods (FQDN fix)
+      rewriteHosts:
+        enabled: true
+        initContainer:
+          image:
+            registry: "mirror.gcr.io"
+            repository: library/alpine
+            tag: "3.20"
+```
+
+### Services
+
+**Enabled by default** - Required for networking.
+
+```yaml
+sync:
+  toHost:
+    services:
+      enabled: true
+```
+
+Services are synced with their specifications preserved, allowing Pods in the virtual cluster to communicate through stable endpoints.
+
+### Endpoints & EndpointSlices
+
+**Enabled by default** - Track service endpoints.
+
+```yaml
+sync:
+  toHost:
+    endpoints:
+      enabled: true
+    endpointSlices:
+      enabled: true
+```
+
+### PersistentVolumeClaims
+
+**Enabled by default** - Provides persistent storage.
+
+```yaml
+sync:
+  toHost:
+    persistentVolumeClaims:
+      enabled: true
+```
+
+PVCs created in the virtual cluster will provision actual storage in the host cluster.
+
+### ConfigMaps & Secrets
+
+**Selective sync by default** - Only syncs ConfigMaps and Secrets that are referenced by Pods.
+
+```yaml
+sync:
+  toHost:
+    configMaps:
+      enabled: true
+      all: false  # Set to true to sync all ConfigMaps
+    secrets:
+      enabled: true
+      all: false  # Set to true to sync all Secrets
+```
+
+**Sync all ConfigMaps and Secrets:**
+```yaml
+sync:
+  toHost:
+    configMaps:
+      enabled: true
+      all: true
+    secrets:
+      enabled: true
+      all: true
+```
+
+## Optional Resources
+
+These resources are disabled by default but can be enabled:
+
+### Ingresses
+
+```yaml
+sync:
+  toHost:
+    ingresses:
+      enabled: true
+```
+
+Enabling ingress syncing allows you to expose services from the virtual cluster through the host cluster's ingress controller.
+
+### NetworkPolicies
+
+```yaml
+sync:
+  toHost:
+    networkPolicies:
+      enabled: true
+```
+
+NetworkPolicies are synced to enforce network segmentation at the host level.
+
+### PriorityClasses
+
+```yaml
+sync:
+  toHost:
+    priorityClasses:
+      enabled: true
+```
+
+### PodDisruptionBudgets
+
+```yaml
+sync:
+  toHost:
+    podDisruptionBudgets:
+      enabled: true
+```
+
+PDBs help ensure high availability during node maintenance or cluster upgrades.
+
+### StorageClasses
+
+```yaml
+sync:
+  toHost:
+    storageClasses:
+      enabled: true
+```
+
+Sync custom StorageClasses from virtual to host cluster.
+
+### ServiceAccounts
+
+```yaml
+sync:
+  toHost:
+    serviceAccounts:
+      enabled: true
+```
+
+### PersistentVolumes
+
+```yaml
+sync:
+  toHost:
+    persistentVolumes:
+      enabled: true
+```
+
+### VolumeSnapshots
+
+```yaml
+sync:
+  toHost:
+    volumeSnapshots:
+      enabled: true
+    volumeSnapshotContents:
+      enabled: true
+```
+
+### Namespaces
+
+```yaml
+sync:
+  toHost:
+    namespaces:
+      enabled: true
+      # Only sync namespaces matched by explicit mappings
+      mappingsOnly: false
+```
+
+Enabling namespace syncing creates corresponding namespaces in the host cluster.
+
+### ResourceClaims (Dynamic Resource Allocation)
+
+```yaml
+sync:
+  toHost:
+    resourceClaims:
+      enabled: true
+    resourceClaimTemplates:
+      enabled: true
+```
+
+## Configuration Examples
+
+### Minimal Production Setup
+
+Sync only essential resources:
+
+```yaml
+sync:
+  toHost:
+    pods:
+      enabled: true
+    services:
+      enabled: true
+    endpoints:
+      enabled: true
+    endpointSlices:
+      enabled: true
+    persistentVolumeClaims:
+      enabled: true
+    configMaps:
+      enabled: true
+      all: false
+    secrets:
+      enabled: true
+      all: false
+```
+
+### Full Feature Setup
+
+Enable additional resources for advanced features:
+
+```yaml
+sync:
+  toHost:
+    pods:
+      enabled: true
+    services:
+      enabled: true
+    endpoints:
+      enabled: true
+    endpointSlices:
+      enabled: true
+    persistentVolumeClaims:
+      enabled: true
+    configMaps:
+      enabled: true
+      all: false
+    secrets:
+      enabled: true
+      all: false
+    ingresses:
+      enabled: true
+    networkPolicies:
+      enabled: true
+    podDisruptionBudgets:
+      enabled: true
+    priorityClasses:
+      enabled: true
+```
+
+### Air-Gapped Environment
+
+Rewrite images for local registry:
+
+```yaml
+sync:
+  toHost:
+    pods:
+      enabled: true
+      translateImage:
+        "gcr.io": "my-registry.internal/gcr-mirror"
+        "docker.io": "my-registry.internal/docker-mirror"
+        "quay.io": "my-registry.internal/quay-mirror"
+      enforceTolerations:
+        - "node-role.kubernetes.io/infra=:NoSchedule"
+```
+
+### High Availability Setup
+
+Enable PDBs and priority classes:
+
+```yaml
+sync:
+  toHost:
+    pods:
+      enabled: true
+      priorityClassName: "high-priority"
+    podDisruptionBudgets:
+      enabled: true
+    priorityClasses:
+      enabled: true
+```
+
+## Implementation Details
+
+The to-host syncing logic is implemented in `pkg/syncer/syncer.go:234`:
+
+```go
+func (r *SyncController) Reconcile(ctx context.Context, vReq reconcile.Request) (res ctrl.Result, retErr error) {
+    // ...
+    if vObj != nil && pObj != nil {
+        // Both exist - sync
+        result, err := r.genericSyncer.Sync(ctx, event)
+    } else if vObj != nil {
+        // Only virtual exists - sync to host
+        result, err := r.genericSyncer.SyncToHost(ctx, event)
+    }
+    // ...
+}
+```
+
+Each resource type has its own syncer implementation in `pkg/controllers/resources/`.
+
+## Selective Syncing
+
+For ConfigMaps and Secrets, vCluster uses an **importer pattern** to selectively sync only resources that are actually used:
+
+- The pod syncer watches for ConfigMap and Secret references
+- Only referenced ConfigMaps and Secrets are synced to the host
+- This reduces resource overhead and improves security
+
+To sync all ConfigMaps and Secrets:
+
+```yaml
+sync:
+  toHost:
+    configMaps:
+      enabled: true
+      all: true  # Sync all ConfigMaps
+    secrets:
+      enabled: true
+      all: true  # Sync all Secrets
+```
+
+## Troubleshooting
+
+### Resource Not Appearing in Host Cluster
+
+1. **Check if syncing is enabled** for that resource type in `values.yaml`
+2. **Verify resource was created** in the virtual cluster
+3. **Check vCluster logs** for sync errors:
+   ```bash
+   kubectl logs -n vcluster-my-vcluster deploy/my-vcluster -f
+   ```
+4. **Verify RBAC permissions** in the host cluster
+
+### Resource Keeps Getting Deleted
+
+This may be due to UID mismatch. Check the annotations on the host resource:
+```bash
+kubectl get pod <translated-name> -o jsonpath='{.metadata.annotations}'
+```
+
+The `vcluster.loft.sh/uid` should match the virtual cluster resource UID.
+
+### ConfigMaps/Secrets Not Syncing
+
+By default, only ConfigMaps and Secrets used by Pods are synced. Either:
+- Create a Pod that references them
+- Enable `all: true` to sync all resources
+
+## Best Practices
+
+1. **Start minimal**: Only enable syncing for resources you need
+2. **Use selective sync**: Keep `configMaps.all: false` and `secrets.all: false` unless required
+3. **Monitor resource usage**: More synced resources means more API calls and memory usage
+4. **Test in development**: Validate syncing configuration before production use
+5. **Use PodDisruptionBudgets**: For production workloads requiring high availability
+
+## Next Steps
+
+- Learn about [syncing from the host cluster](/syncing/from-host)
+- Configure [custom resource syncing](/syncing/custom-resources)
+- Review [networking configuration](/networking/overview)

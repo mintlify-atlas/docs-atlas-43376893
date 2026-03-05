@@ -1,0 +1,615 @@
+---
+title: Configuration
+description: Comprehensive guide to configuring vCluster with values.yaml options
+---
+
+This guide covers the key configuration options available in vCluster's Helm chart. All settings are configured through the `values.yaml` file or via `--set` flags during installation.
+
+## Configuration Structure
+
+The vCluster configuration is organized into major sections:
+
+- **sync**: Resource synchronization between virtual and host clusters
+- **controlPlane**: Control plane components and deployment
+- **networking**: Network configuration and policies
+- **policies**: Resource quotas, limits, and policies
+- **rbac**: Role-based access control settings
+
+## Control Plane Configuration
+
+### Basic Control Plane Settings
+
+Configure the core vCluster control plane:
+
+```yaml
+controlPlane:
+  statefulSet:
+    # Image configuration
+    image:
+      registry: "ghcr.io"
+      repository: "loft-sh/vcluster-pro"
+      tag: ""  # Leave empty to use chart default
+    
+    imagePullPolicy: "IfNotPresent"
+    
+    # Resource allocation
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+        ephemeral-storage: 10Gi
+      requests:
+        cpu: 200m
+        memory: 256Mi
+        ephemeral-storage: 1Gi
+    
+    # High availability settings
+    highAvailability:
+      replicas: 1  # Set to 3 or more for HA
+      leaseDuration: 60
+      renewDeadline: 40
+      retryPeriod: 15
+```
+
+### Kubernetes Distribution
+
+vCluster supports running vanilla Kubernetes instead of the default K3s:
+
+```yaml
+controlPlane:
+  distro:
+    k8s:
+      enabled: true
+      version: "v1.35.0"
+      image:
+        registry: ghcr.io
+        repository: "loft-sh/kubernetes"
+        tag: "v1.35.0"
+      
+      # API Server configuration
+      apiServer:
+        enabled: true
+        extraArgs:
+          - "--enable-admission-plugins=NodeRestriction,PodSecurityPolicy"
+      
+      # Controller Manager
+      controllerManager:
+        enabled: true
+        extraArgs:
+          - "--cluster-signing-duration=87600h"
+      
+      # Scheduler (optional)
+      scheduler:
+        enabled: false
+```
+
+### Backing Store Configuration
+
+Choose and configure the data store for your virtual cluster:
+
+#### Embedded Database (SQLite)
+
+Best for development and testing:
+
+```yaml
+controlPlane:
+  backingStore:
+    database:
+      embedded:
+        enabled: true
+        extraArgs: []
+```
+
+#### Deployed etcd (Production)
+
+Recommended for production with HA:
+
+```yaml
+controlPlane:
+  backingStore:
+    etcd:
+      deploy:
+        enabled: true
+        statefulSet:
+          image:
+            registry: "registry.k8s.io"
+            repository: "etcd"
+            tag: "3.6.4-0"
+          
+          highAvailability:
+            replicas: 3  # Must be odd number for quorum
+          
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          
+          persistence:
+            volumeClaim:
+              enabled: true
+              size: 10Gi
+              storageClass: "fast-ssd"
+              retentionPolicy: Retain
+              accessModes: ["ReadWriteOnce"]
+          
+          # Anti-affinity for HA
+          scheduling:
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchExpressions:
+                        - key: app
+                          operator: In
+                          values:
+                            - vcluster-etcd
+                    topologyKey: kubernetes.io/hostname
+```
+
+#### External Database
+
+Use an external database for shared storage:
+
+```yaml
+controlPlane:
+  backingStore:
+    database:
+      external:
+        enabled: true
+        # MySQL example
+        dataSource: "mysql://username:password@tcp(hostname:3306)/vcluster"
+        
+        # PostgreSQL example
+        # dataSource: "postgres://username:password@hostname:5432/vcluster"
+        
+        # Optional TLS configuration
+        certFile: ""
+        keyFile: ""
+        caFile: ""
+```
+
+#### External etcd
+
+```yaml
+controlPlane:
+  backingStore:
+    etcd:
+      external:
+        enabled: true
+        endpoint: "my-etcd-cluster:2379"
+        tls:
+          caFile: "/path/to/ca.crt"
+          certFile: "/path/to/client.crt"
+          keyFile: "/path/to/client.key"
+```
+
+## Resource Synchronization
+
+Configure what resources sync between virtual and host clusters:
+
+### Sync to Host Cluster
+
+```yaml
+sync:
+  toHost:
+    # Pods (required for most workloads)
+    pods:
+      enabled: true
+      
+      # Translate images for air-gapped environments
+      translateImage:
+        "docker.io/*": "my-registry.com/*"
+      
+      # Enforce tolerations on all pods
+      enforceTolerations:
+        - key: "vcluster"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+      
+      # Runtime and priority classes
+      runtimeClassName: ""
+      priorityClassName: ""
+    
+    # Services
+    services:
+      enabled: true
+    
+    # Persistent Volume Claims
+    persistentVolumeClaims:
+      enabled: true
+    
+    # ConfigMaps and Secrets
+    configMaps:
+      enabled: true
+      all: false  # Only sync necessary ones
+    
+    secrets:
+      enabled: true
+      all: false  # Only sync necessary ones
+    
+    # Optional resources
+    ingresses:
+      enabled: false
+    
+    storageClasses:
+      enabled: false
+    
+    priorityClasses:
+      enabled: false
+    
+    networkPolicies:
+      enabled: false
+```
+
+### Sync from Host Cluster
+
+```yaml
+sync:
+  fromHost:
+    # Events from host
+    events:
+      enabled: true
+    
+    # Storage classes (auto-enabled with virtual scheduler)
+    storageClasses:
+      enabled: auto
+    
+    # CSI drivers
+    csiDrivers:
+      enabled: auto
+    
+    csiNodes:
+      enabled: auto
+    
+    # Node syncing
+    nodes:
+      enabled: false
+      syncBackChanges: false  # Allow labels/taints changes
+      clearImageStatus: false  # Hide node images
+      selector:
+        all: false  # Only sync nodes with pods
+        labels: {}
+```
+
+## Networking Configuration
+
+### Basic Networking
+
+```yaml
+networking:
+  # Pod CIDR for private nodes
+  podCIDR: "10.244.0.0/16"
+  
+  advanced:
+    # Cluster domain
+    clusterDomain: "cluster.local"
+    
+    # Allow fallback to host DNS
+    fallbackHostCluster: false
+    
+    # Proxy kubelets for monitoring
+    proxyKubelets:
+      byHostname: true
+      byIP: true
+```
+
+### Service Replication
+
+Replicate services between clusters:
+
+```yaml
+networking:
+  replicateServices:
+    # From virtual to host
+    toHost:
+      - from: "default/my-app"
+        to: "my-namespace/my-app"
+    
+    # From host to virtual
+    fromHost:
+      - from: "production/database"
+        to: "default/database"
+```
+
+### CoreDNS Configuration
+
+```yaml
+controlPlane:
+  coredns:
+    enabled: true
+    embedded: false  # Set true for PRO embedded mode
+    
+    deployment:
+      replicas: 1
+      image: ""  # Leave empty for default
+      
+      resources:
+        requests:
+          cpu: 20m
+          memory: 64Mi
+        limits:
+          cpu: 1000m
+          memory: 170Mi
+      
+      # HA settings
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+```
+
+## Persistence Configuration
+
+### StatefulSet Persistence
+
+```yaml
+controlPlane:
+  statefulSet:
+    persistence:
+      volumeClaim:
+        enabled: auto  # Auto-detect based on distro
+        size: 5Gi
+        storageClass: ""  # Use default
+        accessModes: ["ReadWriteOnce"]
+        retentionPolicy: Retain  # Keep PVC after deletion
+      
+      # Additional volumes
+      addVolumes:
+        - name: custom-volume
+          emptyDir: {}
+      
+      addVolumeMounts:
+        - name: custom-volume
+          mountPath: /custom-path
+```
+
+## Scheduling and Placement
+
+```yaml
+controlPlane:
+  statefulSet:
+    scheduling:
+      # Node selection
+      nodeSelector:
+        node-type: vcluster
+      
+      # Pod affinity
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: zone
+                    operator: In
+                    values:
+                      - us-west-2a
+      
+      # Tolerations
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "vcluster"
+          effect: "NoSchedule"
+      
+      # Topology spread
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+      
+      # Priority
+      priorityClassName: "high-priority"
+      
+      # Pod management
+      podManagementPolicy: Parallel
+```
+
+## Security Configuration
+
+### Pod Security Context
+
+```yaml
+controlPlane:
+  statefulSet:
+    security:
+      podSecurityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      
+      containerSecurityContext:
+        allowPrivilegeEscalation: false
+        runAsUser: 0
+        runAsGroup: 0
+        capabilities:
+          drop:
+            - ALL
+```
+
+### Service Account
+
+```yaml
+controlPlane:
+  advanced:
+    serviceAccount:
+      enabled: true
+      name: ""  # Auto-generated if empty
+      imagePullSecrets:
+        - name: my-registry-secret
+      annotations:
+        eks.amazonaws.com/role-arn: "arn:aws:iam::123456789:role/vcluster"
+```
+
+## Service and Ingress
+
+### Service Configuration
+
+```yaml
+controlPlane:
+  service:
+    enabled: true
+    
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    
+    spec:
+      type: LoadBalancer
+      loadBalancerIP: "1.2.3.4"
+      
+    # NodePort options
+    httpsNodePort: 31443
+    kubeletNodePort: 31444
+```
+
+### Ingress Configuration
+
+```yaml
+controlPlane:
+  ingress:
+    enabled: true
+    host: "vcluster.example.com"
+    pathType: ImplementationSpecific
+    
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+      nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+    
+    spec:
+      tls:
+        - hosts:
+            - vcluster.example.com
+          secretName: vcluster-tls
+```
+
+## Resource Policies
+
+### Resource Quotas
+
+```yaml
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.cpu: 10
+      requests.memory: 20Gi
+      requests.storage: "100Gi"
+      limits.cpu: 20
+      limits.memory: 40Gi
+      count/pods: 50
+      count/services: 20
+      count/persistentvolumeclaims: 20
+```
+
+### Limit Ranges
+
+```yaml
+policies:
+  limitRange:
+    enabled: true
+    
+    default:
+      cpu: "1"
+      memory: 512Mi
+      ephemeral-storage: 8Gi
+    
+    defaultRequest:
+      cpu: 100m
+      memory: 128Mi
+      ephemeral-storage: 3Gi
+    
+    max:
+      cpu: "4"
+      memory: 8Gi
+    
+    min:
+      cpu: 10m
+      memory: 64Mi
+```
+
+## Best Practices
+
+### Production Configuration Checklist
+
+<Steps>
+  <Step title="Enable High Availability">
+    Set replicas to 3 or more for both control plane and etcd.
+  </Step>
+  
+  <Step title="Configure Persistent Storage">
+    Use persistent volumes with appropriate storage class and retention policy.
+  </Step>
+  
+  <Step title="Set Resource Limits">
+    Define appropriate CPU and memory limits based on expected workload.
+  </Step>
+  
+  <Step title="Enable Monitoring">
+    Configure service monitors and integrate with your monitoring stack.
+  </Step>
+  
+  <Step title="Configure Backups">
+    Set up etcd backups if using deployed etcd.
+  </Step>
+  
+  <Step title="Apply Security Policies">
+    Configure pod security contexts, network policies, and RBAC.
+  </Step>
+</Steps>
+
+### Common Configuration Mistakes
+
+**Insufficient Resources**: Always set resource requests/limits appropriate for your workload.
+
+```yaml
+# ❌ Bad: No limits
+resources: {}
+
+# ✅ Good: Defined limits
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+```
+
+**Single Replica in Production**: Use 3+ replicas for HA.
+
+```yaml
+# ❌ Bad: Single replica
+highAvailability:
+  replicas: 1
+
+# ✅ Good: High availability
+highAvailability:
+  replicas: 3
+```
+
+**No Persistent Storage**: Always enable persistence for production.
+
+```yaml
+# ❌ Bad: Ephemeral storage
+persistence:
+  volumeClaim:
+    enabled: false
+
+# ✅ Good: Persistent storage
+persistence:
+  volumeClaim:
+    enabled: true
+    size: 10Gi
+    retentionPolicy: Retain
+```
+
+## Next Steps
+
+- [High Availability](/deployment/high-availability) - Set up HA configurations
+- [Networking](/deployment/networking) - Advanced networking options
+- [Storage](/deployment/storage) - Persistent storage configuration

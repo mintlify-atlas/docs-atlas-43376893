@@ -1,0 +1,160 @@
+---
+title: "vcluster debug"
+description: "Debug virtual cluster issues"
+---
+
+## Synopsis
+
+Debug and troubleshoot virtual cluster issues.
+
+```bash
+vcluster debug [command] [flags]
+```
+
+## Subcommands
+
+- `collect` - Collect debug information
+- `logs` - View vCluster logs
+
+## vcluster debug collect
+
+Collect comprehensive debug information about a virtual cluster.
+
+### Synopsis
+
+```bash
+vcluster debug collect VCLUSTER_NAME [flags]
+```
+
+### Examples
+
+```bash
+# Collect debug info
+vcluster debug collect my-vcluster -n team-x
+
+# Save to custom location
+vcluster debug collect my-vcluster -n team-x --output debug-info.tar.gz
+
+# Include pod logs
+vcluster debug collect my-vcluster -n team-x --include-logs
+```
+
+### Flags
+
+<ParamField path="--namespace" type="string" required>
+  The namespace where the vCluster is running.
+</ParamField>
+
+<ParamField path="--output" type="string">
+  Output file path for debug information.
+</ParamField>
+
+<ParamField path="--include-logs" type="boolean">
+  Include pod logs in the debug bundle.
+</ParamField>
+
+<ParamField path="--driver" type="string" default="helm">
+  The driver to use.
+</ParamField>
+
+## What Gets Collected
+
+The debug collect command gathers:
+
+- **vCluster resources** - StatefulSets, Services, ConfigMaps
+- **Pod status** - Current state of all pods
+- **Events** - Recent Kubernetes events
+- **Logs** (if `--include-logs` is set) - Control plane logs
+- **Configuration** - Helm values and configuration
+- **Version information** - vCluster and Kubernetes versions
+
+## vcluster debug logs
+
+View logs from vCluster control plane.
+
+### Synopsis
+
+```bash
+vcluster debug logs VCLUSTER_NAME [flags]
+```
+
+### Examples
+
+```bash
+# View logs
+vcluster debug logs my-vcluster -n team-x
+
+# Follow logs
+vcluster debug logs my-vcluster -n team-x --follow
+
+# Filter by component
+vcluster debug logs my-vcluster -n team-x --container syncer
+```
+
+### Flags
+
+<ParamField path="--namespace" type="string" required>
+  The namespace where the vCluster is running.
+</ParamField>
+
+<ParamField path="--follow" type="boolean">
+  Stream logs in real-time.
+</ParamField>
+
+<ParamField path="--container" type="string">
+  Specific container to view logs from.
+</ParamField>
+
+<ParamField path="--tail" type="int" default="100">
+  Number of lines to show from the end.
+</ParamField>
+
+## Complete Example
+
+```bash troubleshoot.sh
+#!/bin/bash
+VCLUSTER="problematic-vcluster"
+NAMESPACE="team-x"
+
+# Check status
+echo "Checking vCluster status..."
+vcluster list -n $NAMESPACE
+
+# View logs
+echo "Viewing control plane logs..."
+vcluster debug logs $VCLUSTER -n $NAMESPACE --tail 50
+
+# Collect debug info
+echo "Collecting debug information..."
+vcluster debug collect $VCLUSTER -n $NAMESPACE \
+  --output debug-$(date +%Y%m%d-%H%M%S).tar.gz \
+  --include-logs
+
+echo "Debug information collected."
+```
+
+## Manual Debugging
+
+For deeper debugging, you can inspect resources directly:
+
+```bash
+# Check pod status
+kubectl get pods -n team-x
+
+# Describe vCluster pod
+kubectl describe pod my-vcluster-0 -n team-x
+
+# Check events
+kubectl get events -n team-x --sort-by='.lastTimestamp'
+
+# View syncer logs
+kubectl logs -n team-x my-vcluster-0 -c syncer
+
+# Check etcd logs (if deployed)
+kubectl logs -n team-x my-vcluster-etcd-0
+```
+
+## See Also
+
+- [Troubleshooting Guide](/operations/troubleshooting) - Complete troubleshooting documentation
+- [Monitoring](/operations/monitoring) - Set up monitoring

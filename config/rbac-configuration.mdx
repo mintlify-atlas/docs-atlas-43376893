@@ -1,0 +1,553 @@
+---
+title: RBAC Configuration
+description: Configure Role-Based Access Control and security policies for vCluster
+---
+
+RBAC (Role-Based Access Control) configuration controls permissions, policies, and security settings for both the vCluster control plane and workloads running within the virtual cluster.
+
+## RBAC Rules
+
+<ParamField path="rbac.role" type="object">
+  Virtual cluster Role configuration for the host cluster namespace.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Enable or disable the Role.
+    </ParamField>
+
+    <ParamField path="overwriteRules" type="array">
+      Completely overwrite the default Role rules.
+      
+      ```yaml
+      overwriteRules:
+        - apiGroups: [""]
+          resources: ["pods"]
+          verbs: ["get", "list", "watch"]
+      ```
+    </ParamField>
+
+    <ParamField path="extraRules" type="array">
+      Add additional rules to the Role.
+      
+      ```yaml
+      extraRules:
+        - apiGroups: ["apps"]
+          resources: ["deployments"]
+          verbs: ["get", "list", "create", "update", "delete"]
+      ```
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="rbac.clusterRole" type="object">
+  Virtual cluster ClusterRole configuration.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="string" default="auto">
+      Enable or disable the ClusterRole. `auto` automatically determines if required.
+    </ParamField>
+
+    <ParamField path="overwriteRules" type="array">
+      Completely overwrite the default ClusterRole rules.
+    </ParamField>
+
+    <ParamField path="extraRules" type="array">
+      Add additional rules to the ClusterRole.
+      
+      ```yaml
+      extraRules:
+        - apiGroups: [""]
+          resources: ["nodes"]
+          verbs: ["get", "list", "watch"]
+      ```
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="rbac.enableVolumeSnapshotRules" type="object">
+  Enable RBAC rules for volume snapshots.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="string" default="auto">
+      Enable volume snapshot RBAC rules. `auto` enables when volume snapshot syncing is configured.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Service Accounts
+
+<ParamField path="controlPlane.advanced.serviceAccount" type="object">
+  vCluster control plane service account.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Deploy the service account.
+    </ParamField>
+
+    <ParamField path="name" type="string">
+      Custom name for the service account.
+    </ParamField>
+
+    <ParamField path="imagePullSecrets" type="array">
+      Image pull secrets for the service account.
+      
+      ```yaml
+      imagePullSecrets:
+        - name: my-registry-secret
+      ```
+    </ParamField>
+
+    <ParamField path="annotations" type="object">
+      Service account annotations.
+      
+      ```yaml
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/vcluster-role
+      ```
+    </ParamField>
+
+    <ParamField path="labels" type="object">
+      Service account labels.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="controlPlane.advanced.workloadServiceAccount" type="object">
+  Service account for workloads running in the virtual cluster.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="true">
+      Deploy the workload service account.
+    </ParamField>
+
+    <ParamField path="name" type="string">
+      Custom name for the workload service account.
+    </ParamField>
+
+    <ParamField path="imagePullSecrets" type="array">
+      Image pull secrets for workloads.
+    </ParamField>
+
+    <ParamField path="annotations" type="object">
+      Workload service account annotations.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Resource Quotas
+
+<ParamField path="policies.resourceQuota" type="object">
+  Resource quota for the virtual cluster.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="string" default="auto">
+      Enable resource quota. `auto` enables if limitRange is enabled.
+    </ParamField>
+
+    <ParamField path="quota" type="object">
+      Resource quota values.
+      
+      ```yaml
+      quota:
+        requests.cpu: 10
+        requests.memory: 20Gi
+        requests.storage: 100Gi
+        requests.ephemeral-storage: 60Gi
+        limits.cpu: 20
+        limits.memory: 40Gi
+        limits.ephemeral-storage: 160Gi
+        services.nodeports: 0
+        services.loadbalancers: 1
+        count/endpoints: 40
+        count/pods: 20
+        count/services: 20
+        count/secrets: 100
+        count/configmaps: 100
+        count/persistentvolumeclaims: 20
+      ```
+    </ParamField>
+
+    <ParamField path="scopeSelector" type="object">
+      Scope selector for resource quota.
+    </ParamField>
+
+    <ParamField path="scopes" type="array">
+      Resource quota scopes.
+    </ParamField>
+
+    <ParamField path="annotations" type="object">
+      Resource quota annotations.
+    </ParamField>
+
+    <ParamField path="labels" type="object">
+      Resource quota labels.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Limit Range
+
+<ParamField path="policies.limitRange" type="object">
+  LimitRange for the virtual cluster.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="string" default="auto">
+      Enable limit range. `auto` enables if resourceQuota is enabled.
+    </ParamField>
+
+    <ParamField path="default" type="object">
+      Default resource limits.
+      
+      ```yaml
+      default:
+        cpu: "1"
+        memory: 512Mi
+        ephemeral-storage: 8Gi
+      ```
+    </ParamField>
+
+    <ParamField path="defaultRequest" type="object">
+      Default resource requests.
+      
+      ```yaml
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+        ephemeral-storage: 3Gi
+      ```
+    </ParamField>
+
+    <ParamField path="min" type="object">
+      Minimum resource limits.
+    </ParamField>
+
+    <ParamField path="max" type="object">
+      Maximum resource limits.
+    </ParamField>
+
+    <ParamField path="annotations" type="object">
+      LimitRange annotations.
+    </ParamField>
+
+    <ParamField path="labels" type="object">
+      LimitRange labels.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Network Policies
+
+<ParamField path="policies.networkPolicy" type="object">
+  NetworkPolicy configuration for isolating virtual cluster traffic.
+
+  <Expandable title="properties">
+    <ParamField path="enabled" type="boolean" default="false">
+      Enable NetworkPolicy deployment.
+    </ParamField>
+
+    <ParamField path="fallbackDns" type="string" default="8.8.8.8">
+      Fallback DNS server if virtual cluster doesn't have one.
+    </ParamField>
+
+    <ParamField path="controlPlane" type="object">
+      Network policies for the control plane.
+      
+      <Expandable title="properties">
+        <ParamField path="ingress" type="array">
+          Ingress rules for control plane.
+          
+          ```yaml
+          ingress:
+            - from:
+                - podSelector:
+                    matchLabels:
+                      app: allowed-client
+              ports:
+                - protocol: TCP
+                  port: 8443
+          ```
+        </ParamField>
+        
+        <ParamField path="egress" type="array">
+          Egress rules for control plane.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="workload" type="object">
+      Network policies for workloads.
+      
+      <Expandable title="properties">
+        <ParamField path="publicEgress" type="object">
+          Public outgoing connections for workloads.
+          
+          <Expandable title="properties">
+            <ParamField path="enabled" type="boolean" default="true">
+              Enable workload public egress.
+            </ParamField>
+            
+            <ParamField path="cidr" type="string" default="0.0.0.0/0">
+              Allowed destination CIDR.
+            </ParamField>
+            
+            <ParamField path="except" type="array">
+              Excluded CIDRs.
+              
+              Default:
+              ```yaml
+              except:
+                - 100.64.0.0/10
+                - 127.0.0.0/8
+                - 10.0.0.0/8
+                - 172.16.0.0/12
+                - 192.168.0.0/16
+              ```
+            </ParamField>
+          </Expandable>
+        </ParamField>
+        
+        <ParamField path="ingress" type="array">
+          Ingress rules for workloads.
+        </ParamField>
+        
+        <ParamField path="egress" type="array">
+          Egress rules for workloads.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="annotations" type="object">
+      NetworkPolicy annotations.
+    </ParamField>
+
+    <ParamField path="labels" type="object">
+      NetworkPolicy labels.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Central Admission
+
+<ParamField path="policies.centralAdmission" type="object" pro>
+  Define validating or mutating webhooks to enforce within the virtual cluster (PRO feature).
+
+  <Expandable title="properties">
+    <ParamField path="validatingWebhooks" type="array">
+      Validating webhooks to enforce.
+    </ParamField>
+
+    <ParamField path="mutatingWebhooks" type="array">
+      Mutating webhooks to enforce.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Security Context
+
+<ParamField path="controlPlane.statefulSet.security" type="object">
+  Security context for the control plane.
+
+  <Expandable title="properties">
+    <ParamField path="podSecurityContext" type="object">
+      Pod-level security context.
+      
+      ```yaml
+      podSecurityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
+      ```
+    </ParamField>
+
+    <ParamField path="containerSecurityContext" type="object">
+      Container-level security context.
+      
+      Default:
+      ```yaml
+      containerSecurityContext:
+        allowPrivilegeEscalation: false
+        runAsUser: 0
+        runAsGroup: 0
+      ```
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Example: Custom RBAC Rules
+
+```yaml
+rbac:
+  role:
+    enabled: true
+    extraRules:
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        verbs: ["get", "list", "watch", "create", "update"]
+  
+  clusterRole:
+    enabled: true
+    extraRules:
+      - apiGroups: [""]
+        resources: ["nodes", "persistentvolumes"]
+        verbs: ["get", "list", "watch"]
+```
+
+## Example: Resource Quotas and Limits
+
+```yaml
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.cpu: 20
+      requests.memory: 40Gi
+      limits.cpu: 40
+      limits.memory: 80Gi
+      count/pods: 50
+      count/services: 30
+  
+  limitRange:
+    enabled: true
+    default:
+      cpu: "2"
+      memory: 1Gi
+    defaultRequest:
+      cpu: 200m
+      memory: 256Mi
+    max:
+      cpu: "4"
+      memory: 8Gi
+    min:
+      cpu: 50m
+      memory: 64Mi
+```
+
+## Example: Network Isolation
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    fallbackDns: 1.1.1.1
+    
+    controlPlane:
+      # Only allow access from specific pods
+      ingress:
+        - from:
+            - podSelector:
+                matchLabels:
+                  access: vcluster
+          ports:
+            - protocol: TCP
+              port: 8443
+    
+    workload:
+      # Restrict public egress
+      publicEgress:
+        enabled: true
+        cidr: 0.0.0.0/0
+        except:
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+      
+      # Custom ingress rules
+      ingress:
+        - from:
+            - namespaceSelector:
+                matchLabels:
+                  name: allowed-namespace
+```
+
+## Example: Service Account with AWS IAM
+
+```yaml
+controlPlane:
+  advanced:
+    serviceAccount:
+      enabled: true
+      name: vcluster-sa
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/vcluster-role
+    
+    workloadServiceAccount:
+      enabled: true
+      name: vcluster-workload-sa
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/workload-role
+      imagePullSecrets:
+        - name: ecr-registry-secret
+```
+
+## Example: Pod Security Standards
+
+```yaml
+controlPlane:
+  statefulSet:
+    security:
+      podSecurityContext:
+        runAsNonRoot: true
+        runAsUser: 10000
+        runAsGroup: 10000
+        fsGroup: 10000
+        seccompProfile:
+          type: RuntimeDefault
+      
+      containerSecurityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        capabilities:
+          drop:
+            - ALL
+```
+
+## Use Cases
+
+### Multi-Tenant Resource Isolation
+
+Enforce resource limits per virtual cluster:
+
+```yaml
+policies:
+  resourceQuota:
+    enabled: true
+    quota:
+      requests.cpu: 10
+      requests.memory: 20Gi
+      count/pods: 30
+  limitRange:
+    enabled: true
+```
+
+### Strict Network Isolation
+
+Isolate virtual cluster traffic:
+
+```yaml
+policies:
+  networkPolicy:
+    enabled: true
+    workload:
+      publicEgress:
+        enabled: false
+```
+
+### Cluster-Wide Resource Access
+
+Grant ClusterRole permissions:
+
+```yaml
+rbac:
+  clusterRole:
+    enabled: true
+    extraRules:
+      - apiGroups: [""]
+        resources: ["nodes", "namespaces"]
+        verbs: ["get", "list", "watch"]
+```
+
+## Related Configuration
+
+- See [Control Plane](/config/control-plane) for security context configuration
+- See [Networking Options](/config/networking-options) for network policies
+- See [Values Reference](/config/values-reference) for all options
