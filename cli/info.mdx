@@ -1,0 +1,107 @@
+---
+title: "vcluster info"
+description: "Display information about vCluster CLI and environment"
+---
+
+## Synopsis
+
+Displays information about the vCluster CLI installation and environment.
+
+```bash
+vcluster info [flags]
+```
+
+## Description
+
+The `info` command shows details about your vCluster CLI installation, including version, platform information, and configuration paths.
+
+## Examples
+
+```bash
+# Display vCluster info
+vcluster info
+
+# Show in JSON format
+vcluster info --output json
+```
+
+## Flags
+
+<ParamField path="--output" type="string">
+  Output format. Options: `json`, `yaml`. Default is human-readable text.
+</ParamField>
+
+## Output Information
+
+The info command displays:
+
+- **CLI Version** - Installed vCluster CLI version
+- **Platform** - Operating system and architecture
+- **Config Path** - Location of vCluster configuration file
+- **Default Driver** - Configured driver (helm, platform, docker)
+- **Kubernetes Context** - Current kubectl context
+- **vCluster Platform** - Platform connection status (if configured)
+
+## Example Output
+
+```
+vCluster CLI
+Version:        v0.30.0
+Platform:       linux/amd64
+Go Version:     go1.22.0
+
+Configuration:
+Config Path:    /home/user/.vcluster/config.json
+Default Driver: helm
+
+Kubernetes:
+Current Context: kind-kind
+Current Namespace: default
+
+vCluster Platform:
+Connected:      false
+```
+
+## Use Cases
+
+### Verify Installation
+
+```bash
+# Check if CLI is installed correctly
+vcluster info
+
+# Get version programmatically
+vcluster info --output json | jq -r '.version'
+```
+
+### Debug Configuration
+
+```bash
+# Check config location
+vcluster info | grep "Config Path"
+
+# Verify driver settings
+vcluster info --output json | jq '.config.driver'
+```
+
+### CI/CD Environment Check
+
+```bash ci-check.sh
+#!/bin/bash
+# Verify vCluster CLI version in CI
+REQUIRED_VERSION="0.30.0"
+INSTALLED_VERSION=$(vcluster info --output json | jq -r '.version' | sed 's/v//')
+
+if [ "$INSTALLED_VERSION" != "$REQUIRED_VERSION" ]; then
+  echo "Error: vCluster CLI version mismatch"
+  echo "Required: $REQUIRED_VERSION, Installed: $INSTALLED_VERSION"
+  exit 1
+fi
+
+echo "vCluster CLI version check passed"
+```
+
+## See Also
+
+- [vcluster upgrade](/cli/upgrade) - Upgrade the CLI
+- [vcluster describe](/cli/describe) - Describe a virtual cluster

@@ -1,0 +1,150 @@
+---
+title: "vcluster describe"
+description: "Describe a virtual cluster and view its configuration"
+---
+
+## Synopsis
+
+Describes a virtual cluster and displays detailed information about its configuration and status.
+
+```bash
+vcluster describe VCLUSTER_NAME [flags]
+```
+
+## Description
+
+The `describe` command shows comprehensive information about a virtual cluster, including its configuration, status, and metadata.
+
+## Examples
+
+```bash
+# Describe a vCluster
+vcluster describe my-vcluster --namespace team-x
+
+# Output as JSON
+vcluster describe my-vcluster -n team-x --output json
+
+# Output as YAML
+vcluster describe my-vcluster -n team-x --output yaml
+
+# Show only configuration
+vcluster describe my-vcluster -n team-x --config-only
+```
+
+## Flags
+
+<ParamField path="--namespace" type="string" required>
+  The Kubernetes namespace where the vCluster is running.
+</ParamField>
+
+<ParamField path="--driver" type="string" default="helm">
+  The driver to use. Options: `helm`, `platform`, `docker`.
+</ParamField>
+
+<ParamField path="--output" type="string">
+  Output format. Options: `json`, `yaml`. Default is human-readable text.
+</ParamField>
+
+<ParamField path="--config-only" type="boolean">
+  Return only the vcluster.yaml configuration without status information.
+</ParamField>
+
+<ParamField path="--project" type="string">
+  [PLATFORM] The project name.
+</ParamField>
+
+## Output Information
+
+The describe command shows:
+
+- **Name and Namespace** - vCluster identification
+- **Status** - Current state (Running, Paused, etc.)
+- **Version** - vCluster version
+- **Created** - Creation timestamp
+- **Kubernetes Version** - Virtual cluster K8s version
+- **Configuration** - Helm values or configuration
+- **Resources** - Pod, Service details
+- **Endpoints** - Connection endpoints
+
+## Example Output
+
+### Human-Readable Format
+
+```
+Name:         my-vcluster
+Namespace:    team-x
+Status:       Running
+Version:      0.30.0
+Created:      2024-03-05 10:30:15 +0000 UTC
+Kubernetes:   v1.29.0
+Driver:       helm
+
+Configuration:
+  Backing Store: embedded-etcd
+  HA Mode:       false
+  Replicas:      1
+
+Resources:
+  Pod:      my-vcluster-0 (Running)
+  Service:  my-vcluster (ClusterIP)
+
+Endpoints:
+  Internal: https://my-vcluster.team-x.svc:443
+```
+
+### JSON Format
+
+```json
+{
+  "name": "my-vcluster",
+  "namespace": "team-x",
+  "status": "Running",
+  "version": "0.30.0",
+  "created": "2024-03-05T10:30:15Z",
+  "kubernetes_version": "v1.29.0",
+  "config": {
+    "backingStore": "embedded-etcd",
+    "highAvailability": false,
+    "replicas": 1
+  }
+}
+```
+
+## Use Cases
+
+### Verify Configuration
+
+```bash
+# Check if HA is enabled
+vcluster describe my-vcluster -n team-x --config-only | grep highAvailability
+
+# Get full config for backup
+vcluster describe my-vcluster -n team-x -o yaml > vcluster-config-backup.yaml
+```
+
+### Troubleshooting
+
+```bash
+# Check status and version
+vcluster describe my-vcluster -n team-x
+
+# Get JSON for parsing
+vcluster describe my-vcluster -n team-x -o json | jq '.status'
+```
+
+### CI/CD Integration
+
+```bash
+# Verify vCluster exists and is running
+if vcluster describe test-cluster -n ci -o json | jq -e '.status == "Running"'; then
+  echo "vCluster is ready"
+else
+  echo "vCluster is not ready"
+  exit 1
+fi
+```
+
+## See Also
+
+- [vcluster list](/cli/list) - List all vClusters
+- [vcluster info](/cli/info) - Show vCluster information

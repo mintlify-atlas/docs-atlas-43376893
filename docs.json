@@ -120,6 +120,7 @@
               "cli/create",
               "cli/connect",
               "cli/list",
+              "cli/describe",
               "cli/delete",
               "cli/pause",
               "cli/resume",
@@ -128,6 +129,7 @@
               "cli/restore",
               "cli/node",
               "cli/token",
+              "cli/info",
               "cli/debug"
             ]
           }
