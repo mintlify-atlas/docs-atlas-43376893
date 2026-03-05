@@ -1,0 +1,167 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "vCluster",
+  "projectDescription": "Create fully functional virtual Kubernetes clusters that run inside namespaces of a host cluster with flexible tenancy options.",
+  "theme": "aspen",
+  "primaryColor": "#040c24",
+  "lightColor": "#f96609",
+  "darkColor": "#efb87a",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/virtual-clusters",
+              "architecture/shared-nodes",
+              "architecture/dedicated-nodes",
+              "architecture/private-nodes",
+              "architecture/standalone-mode",
+              "architecture/auto-nodes"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/helm-installation",
+              "deployment/configuration",
+              "deployment/high-availability",
+              "deployment/networking",
+              "deployment/storage"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/managing-vclusters",
+              "operations/pause-resume",
+              "operations/snapshots",
+              "operations/backup-restore",
+              "operations/upgrading",
+              "operations/monitoring",
+              "operations/troubleshooting"
+            ]
+          },
+          {
+            "group": "Resource Syncing",
+            "pages": [
+              "syncing/overview",
+              "syncing/to-host",
+              "syncing/from-host",
+              "syncing/custom-resources"
+            ]
+          },
+          {
+            "group": "Use Cases",
+            "pages": [
+              "use-cases/multi-tenancy",
+              "use-cases/gpu-platforms",
+              "use-cases/development-testing",
+              "use-cases/cost-optimization"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/isolation",
+              "security/rbac",
+              "security/certificates",
+              "security/network-policies"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/cert-manager",
+              "integrations/external-secrets",
+              "integrations/metrics-server",
+              "integrations/istio"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CLI Reference",
+        "groups": [
+          {
+            "group": "Commands",
+            "pages": [
+              "cli/overview",
+              "cli/create",
+              "cli/connect",
+              "cli/list",
+              "cli/delete",
+              "cli/pause",
+              "cli/resume",
+              "cli/upgrade",
+              "cli/snapshot",
+              "cli/restore",
+              "cli/node",
+              "cli/token",
+              "cli/debug"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Configuration",
+        "groups": [
+          {
+            "group": "Reference",
+            "pages": [
+              "config/values-reference",
+              "config/control-plane",
+              "config/sync-configuration",
+              "config/networking-options",
+              "config/storage-options",
+              "config/rbac-configuration"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Isolated control plane with dedicated API server per virtual cluster",
+    "Multiple deployment architectures: shared nodes, dedicated nodes, private nodes, and standalone",
+    "Bidirectional resource syncing between virtual and host clusters",
+    "Sleep mode for pausing inactive virtual clusters",
+    "High availability with etcd and leader election",
+    "Hybrid scheduling for AI/ML workloads",
+    "Auto nodes with Karpenter-powered dynamic autoscaling",
+    "Snapshot and restore capabilities",
+    "Native integrations with cert-manager, external-secrets, and Istio",
+    "CLI tool for managing virtual cluster lifecycle"
+  ],
+  "publicApiSurface": [
+    "vcluster create - Create a new virtual cluster",
+    "vcluster connect - Connect to a virtual cluster",
+    "vcluster list - List all virtual clusters",
+    "vcluster delete - Delete a virtual cluster",
+    "vcluster pause - Pause a virtual cluster",
+    "vcluster resume - Resume a paused virtual cluster",
+    "vcluster upgrade - Upgrade a virtual cluster",
+    "vcluster snapshot - Manage virtual cluster snapshots",
+    "vcluster restore - Restore from a snapshot",
+    "vcluster node - Manage virtual cluster nodes",
+    "vcluster token - Manage authentication tokens",
+    "vcluster debug - Debug virtual cluster issues",
+    "Helm Chart - chart/values.yaml configuration",
+    "sync.toHost - Resources synced from virtual to host cluster",
+    "sync.fromHost - Resources synced from host to virtual cluster",
+    "controlPlane - Control plane configuration options",
+    "privateNodes - Private nodes configuration",
+    "autoNodes - Auto nodes configuration"
+  ]
+}
